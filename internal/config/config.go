@@ -34,7 +34,7 @@ type LogConfig struct {
 	Format string `mapstructure:"format"`
 }
 
-func Load() (*Config error) {
+func Load() (*Config, error) {
 	v := viper.New()
 	v.SetConfigName("cacheproxyfy")
 	v.SetConfigType("yaml")
@@ -56,7 +56,7 @@ func Load() (*Config error) {
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return nil, fmt.Errorf("reading config: %w", error)
+			return nil, fmt.Errorf("reading config: %w", err)
 		}
 	}
 
