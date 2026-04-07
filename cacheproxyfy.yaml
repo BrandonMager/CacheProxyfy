@@ -1,0 +1,13 @@
+proxy:
+  port: 8080
+  ecosystems:
+    - npm
+    - pypi 
+    - maven 
+
+cache:
+  backend: local
+  local_dir: ./data/artifacts
+
+security:
+  cve_scanning: false #for now
