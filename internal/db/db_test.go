@@ -102,9 +102,12 @@ func TestMigrate_Idempotent(t *testing.T) {
 	if err := db.Migrate(ctx); err != nil {
 		t.Fatalf("first Migrate failed: %v", err)
 	}
+	t.Log("first Migrate: ok")
+
 	if err := db.Migrate(ctx); err != nil {
 		t.Fatalf("second Migrate failed (not idempotent): %v", err)
 	}
+	t.Log("second Migrate: ok")
 }
 
 // configFromConnStr parses a postgres connection string of the form
