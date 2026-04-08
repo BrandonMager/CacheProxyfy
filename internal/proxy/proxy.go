@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/BrandonMager/CacheProxyfy/internal/ecosystem"
@@ -153,5 +154,5 @@ func (p *Proxy) fetchFromUpstream(ctx context.Context, handler ecosystem.Handler
 func (p *Proxy) handleHealth(w http.ResponseWriter, _ *http.Request){
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"ok", "storage":%q, "ecosystems":%q}`, p.storage.Name(), p.router.Ecosystems)
+	fmt.Fprintf(w, `{"status":"ok", "storage":%q, "ecosystems":%q}`, p.storage.Name(), strings.Join(p.router.Ecosystems(), ","))
 }

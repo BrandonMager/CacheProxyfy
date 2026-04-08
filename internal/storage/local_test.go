@@ -62,7 +62,7 @@ func TestLocalGetNotFound(t *testing.T) {
 	}
 }
 
-func (t *testing.T) {
+func TestLocalPutIdempotent(t *testing.T) {
 	l, err := NewLocal(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -128,6 +128,44 @@ func TestLocalNoTmpFileOnWriteFailure(t *testing.T) {
 	tmpPath := filepath.Join(dir, checksum[:2], checksum+".tmp")
 	if _, err := os.Stat(tmpPath); err == nil {
 		t.Errorf("expected .tmp file to be cleaned up after write failure")
+	}
+}
+
+func TestLocalExistsAfterPut(t *testing.T) {
+	l, err := NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	checksum := "abcd1234efgh5678"
+	content := "hello artifact"
+
+	if err := l.Put(ctx, checksum, strings.NewReader(content), int64(len(content))); err != nil {
+		t.Fatalf("Put() error: %v", err)
+	}
+
+	ok, err := l.Exists(ctx, checksum)
+	if err != nil {
+		t.Fatalf("Exists() error: %v", err)
+	}
+	if !ok {
+		t.Error("expected Exists()=true after Put, got false")
+	}
+}
+
+func TestLocalExistsUnknownChecksum(t *testing.T) {
+	l, err := NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ok, err := l.Exists(context.Background(), "doesnotexist1234")
+	if err != nil {
+		t.Fatalf("Exists() error: %v", err)
+	}
+	if ok {
+		t.Error("expected Exists()=false for unknown checksum, got true")
 	}
 }
 
