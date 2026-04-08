@@ -17,7 +17,7 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo
+		Level: slog.LevelInfo,
 	}))
 
 	if err := run(logger); err != nil {
