@@ -79,6 +79,17 @@ func (l *Local) Put(_ context.Context, checksum string, r io.Reader, _ int64) er
 	return nil
 }
 
+func (l *Local) Exists(_ context.Context, checksum string) (bool, error) {
+	_, err := os.Stat(l.path(checksum))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking artifact %s: %w", checksum[:8], err)
+	}
+	return true, nil
+}
+
 func (l *Local) Delete(_ context.Context, checksum string) error {
 	err := os.Remove(l.path(checksum))
 	if os.IsNotExist(err){

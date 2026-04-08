@@ -10,7 +10,7 @@ import (
 
 
 var npmTarball = regexp.MustCompile(
-	`^/npm/(@[^/]+[^/]+|[^@/][^/]*)/-/([^/]+\.tgz)$`,
+	`^/npm/(@[^/]+/[^/]+|[^@/][^/]*)/-/([^/]+\.tgz)$`,
 )
 
 type NPM struct {
