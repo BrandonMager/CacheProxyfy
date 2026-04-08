@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -49,11 +50,13 @@ func Open(cfg Config) (*DB, error) {
 	return &DB{sqlDB}, nil
 }
 
+var ErrMigrate = errors.New("db: migrate failed")
+
 // Runs schema idempotently
 func (db *DB) Migrate(ctx context.Context) error {
 	_, err := db.ExecContext(ctx, schema)
 	if err != nil {
-		return fmt.Errorf("db: migrate: %w", err)
+		return fmt.Errorf("%w: %w", ErrMigrate, err)
 	}
 
 	return nil
@@ -69,7 +72,7 @@ const schema = `
 		size_bytes BIGINT NOT NULL DEFAULT 0,
 		cached_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		last_hit_at TIMESTAMPTZ,
-		CONSTRAINT packages_unique (ecosystem, name, version)
+		CONSTRAINT packages_unique UNIQUE (ecosystem, name, version)
 	);
 
 	CREATE INDEX IF NOT EXISTS package_ecosystem_name
