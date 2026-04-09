@@ -51,7 +51,7 @@ func (db *DB) UpsertPackage(ctx context.Context, pkg Package) (string, error) {
 	return checksum, nil
 }
 
-func (db *DB) GetPackage(ctx Context.context, ecosystem, name, version string) (Package, error) {
+func (db *DB) GetPackage(ctx context.Context, ecosystem, name, version string) (Package, error) {
 	const q = `
 		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
 		FROM packages
@@ -145,3 +145,42 @@ func (db *DB) RecordEvent(ctx context.Context, ecosystem, name, version, event s
 
 	return nil
 } 
+
+type Stats struct {
+	TotalPackages int64
+	TotalHits int64
+	TotalMisses int64
+	BytesSaved int64
+	HitRate float64
+}
+
+func (db *DB) GetStats(ctx context.Context, since time.Time) (Stats, error) {
+	const q = `
+		SELECT 
+			(SELECT COUNT(*) FROM packages) AS total_packages,
+			COUNT(*) FILTER (WHERE event = 'hit') AS total_hits,
+			COUNT(*) FILTER (WHERE event = 'miss') AS total_misses,
+			COALESCE(SUM(bytes) FILTER (WHERE event = 'hit'), 0) AS bytes_saved
+
+		FROM cache_events
+		WHERE recorded_at >= $1
+	`
+	var s Stats
+	err := db.QueryRowContext(ctx, q, since).Scan(
+		&s.TotalPackages,
+		&s.TotalHits,
+		&s.TotalMisses,
+		&s.BytesSaved,
+	)
+
+	if err != nil {
+		return Stats{}, fmt.Errorf("db: get stats: %w", err)
+	}
+
+	total := s.TotalHits + s.TotalMisses
+	if total > 0 {
+		s.HitRate = float64(s.TotalHits) / float64(total)
+	}
+
+	return s, nil
+}
