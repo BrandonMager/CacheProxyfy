@@ -454,15 +454,27 @@ func TestPackageStore_Integration(t *testing.T) {
 		}
 	})
 
-	t.Run("UpsertPackage updates checksum", func(t *testing.T) {
+	t.Run("UpsertPackage updates checksum and size on conflict", func(t *testing.T) {
 		updated := pkg
 		updated.Checksum = "xyz999"
+		updated.SizeBytes = 1024
 		checksum, err := db.UpsertPackage(ctx, updated)
 		if err != nil {
 			t.Fatalf("UpsertPackage update: %v", err)
 		}
 		if checksum != "xyz999" {
-			t.Errorf("updated checksum: got %q, want %q", checksum, "xyz999")
+			t.Errorf("returned checksum: got %q, want %q", checksum, "xyz999")
+		}
+
+		got, err := db.GetPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version)
+		if err != nil {
+			t.Fatalf("GetPackage after upsert: %v", err)
+		}
+		if got.Checksum != "xyz999" {
+			t.Errorf("stored checksum: got %q, want %q", got.Checksum, "xyz999")
+		}
+		if got.SizeBytes != 1024 {
+			t.Errorf("stored size_bytes: got %d, want %d", got.SizeBytes, 1024)
 		}
 	})
 
@@ -484,9 +496,25 @@ func TestPackageStore_Integration(t *testing.T) {
 	})
 
 	t.Run("TouchPackage sets last_hit_at", func(t *testing.T) {
+		// Ensure the target package exists (idempotent if already inserted).
+		if _, err := db.UpsertPackage(ctx, pkg); err != nil {
+			t.Fatalf("UpsertPackage pkg: %v", err)
+		}
+
+		// Insert a second package that should not be affected by the touch.
+		other := Package{
+			Ecosystem: "npm", Name: "express", Version: "4.18.0",
+			Checksum: "exp000", SizeBytes: 200,
+		}
+		if _, err := db.UpsertPackage(ctx, other); err != nil {
+			t.Fatalf("UpsertPackage other: %v", err)
+		}
+
 		if err := db.TouchPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err != nil {
 			t.Fatalf("TouchPackage: %v", err)
 		}
+
+		// Touched row should have last_hit_at set.
 		got, err := db.GetPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version)
 		if err != nil {
 			t.Fatalf("GetPackage after touch: %v", err)
@@ -494,14 +522,28 @@ func TestPackageStore_Integration(t *testing.T) {
 		if got.LastHitAt == nil {
 			t.Error("expected LastHitAt to be set after TouchPackage")
 		}
+
+		// Unrelated row should still have last_hit_at as nil.
+		untouched, err := db.GetPackage(ctx, other.Ecosystem, other.Name, other.Version)
+		if err != nil {
+			t.Fatalf("GetPackage other: %v", err)
+		}
+		if untouched.LastHitAt != nil {
+			t.Errorf("expected LastHitAt to be nil for untouched row, got %v", untouched.LastHitAt)
+		}
 	})
 
-	t.Run("ListVersions returns all versions", func(t *testing.T) {
-		_, err := db.UpsertPackage(ctx, Package{
+	t.Run("ListVersions returns all versions ordered by cached_at DESC", func(t *testing.T) {
+		// Ensure the first package exists, then wait a moment so the second
+		// package gets a strictly later cached_at timestamp.
+		if _, err := db.UpsertPackage(ctx, pkg); err != nil {
+			t.Fatalf("UpsertPackage pkg: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+		if _, err := db.UpsertPackage(ctx, Package{
 			Ecosystem: "npm", Name: "lodash", Version: "4.17.20",
 			Checksum: "old111", SizeBytes: 480,
-		})
-		if err != nil {
+		}); err != nil {
 			t.Fatalf("UpsertPackage v2: %v", err)
 		}
 
@@ -511,6 +553,9 @@ func TestPackageStore_Integration(t *testing.T) {
 		}
 		if len(pkgs) != 2 {
 			t.Errorf("expected 2 versions, got %d", len(pkgs))
+		}
+		if pkgs[0].CachedAt.Before(pkgs[1].CachedAt) {
+			t.Errorf("expected descending cached_at order: got %v before %v", pkgs[0].CachedAt, pkgs[1].CachedAt)
 		}
 	})
 
