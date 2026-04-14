@@ -9,7 +9,7 @@ import (
 )
 
 var pypiArtifact = regexp.MustCompile(
-	`/pypi/packages/[^/]+/[^/]+/([^/]+)/(([^/]+?)[-_](\d[^/]*?)(?:\.tar\.gz|\.whl|\.zip))$`
+	`/pypi/packages/[^/]+/[^/]+/([^/]+)/(([^/]+?)[-_](\d[^/]*?)(?:\.tar\.gz|\.whl|\.zip))$`,
 )
 
 type PyPI struct {
@@ -31,22 +31,23 @@ func (p *PyPI) Parse(r *http.Request) (*Package, error){
 	}
 
 	name := normalise(m[1])
-	filename = := m[2]
+	filename := m[2]
 	version := m[4]
 
 	return &Package{
 		Ecosystem: "pypi",
 		Name: name,
 		Version: version,
-		Filename: filename
+		Filename: filename,
 	}, nil
 }
+
 
 func (p *PyPI) UpstreamURL(pkg *Package) string {
 	return fmt.Sprintf("%s/packages/%s", p.UpstreamBase, pkg.Filename)
 }
 
-func (p *PyPI) RewriteResponse(_ context.Context, body []byte, *Package) ([]byte, error){
+func (p *PyPI) RewriteResponse(_ context.Context, body []byte, _ *Package) ([]byte, error){
 	return body, nil
 }
 

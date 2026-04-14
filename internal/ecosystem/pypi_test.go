@@ -85,6 +85,18 @@ func TestPyPIParseErrors(t *testing.T) {
 			name: "missing version segment",
 			path: "/pypi/packages/ab/cd/requests/requests.whl",
 		},
+		{
+			name: "root path",
+			path: "/",
+		},
+		{
+			name: "unrelated path",
+			path: "/health",
+		},
+		{
+			name: "wrong ecosystem prefix",
+			path: "/npm/packages/ab/cd/requests/requests-2.28.0-py3-none-any.whl",
+		},
 	}
 
 	p := NewPyPI()
