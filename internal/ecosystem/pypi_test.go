@@ -113,12 +113,38 @@ func TestPyPIParseErrors(t *testing.T) {
 }
 
 func TestPyPIUpstreamURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		{
+			name:     "wheel file",
+			filename: "requests-2.28.0-py3-none-any.whl",
+			want:     "https://files.pythonhosted.org/packages/requests-2.28.0-py3-none-any.whl",
+		},
+		{
+			name:     "sdist tar.gz",
+			filename: "numpy-1.24.0.tar.gz",
+			want:     "https://files.pythonhosted.org/packages/numpy-1.24.0.tar.gz",
+		},
+		{
+			name:     "zip file",
+			filename: "some_package-3.0.0.zip",
+			want:     "https://files.pythonhosted.org/packages/some_package-3.0.0.zip",
+		},
+	}
+
 	p := NewPyPI()
-	pkg := &Package{Filename: "requests-2.28.0-py3-none-any.whl"}
-	got := p.UpstreamURL(pkg)
-	want := "https://files.pythonhosted.org/packages/requests-2.28.0-py3-none-any.whl"
-	if got != want {
-		t.Errorf("expected %q, got %q", want, got)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pkg := &Package{Filename: tc.filename}
+			got := p.UpstreamURL(pkg)
+			if got != tc.want {
+				t.Errorf("expected %q, got %q", tc.want, got)
+			}
+		})
 	}
 }
 
