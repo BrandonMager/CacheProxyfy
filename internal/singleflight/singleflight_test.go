@@ -210,3 +210,74 @@ func TestDo_DifferentKeys_AllFnInvokedIndependently(t *testing.T) {
 		t.Errorf("expected fn called %d times (once per key), got %d", numKeys, n)
 	}
 }
+
+func TestDo_DifferentKeys_NoMutualBlocking(t *testing.T) {
+	g := NewGroup()
+
+	const fnDuration = 50 * time.Millisecond
+
+	// Both fn calls must be in-flight at the same time for parallel execution.
+	// We verify this by checking that the two goroutines' fn windows overlap:
+	// each fn records its start time, and we assert that the second fn started
+	// before the first fn finished (i.e. start[1] < start[0]+fnDuration).
+	starts := make([]time.Time, 2)
+
+	var wg sync.WaitGroup
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			g.Do("npm", fmt.Sprintf("parallel-pkg-%d", i), "1.0.0", func() ([]byte, error) {
+				starts[i] = time.Now()
+				time.Sleep(fnDuration)
+				return []byte("data"), nil
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	// If the two fn calls ran serially the later start would be >= fnDuration
+	// after the earlier start. Parallel execution means the gap is well under
+	// fnDuration (typically < 1 ms since both goroutines are launched together).
+	gap := starts[1].Sub(starts[0])
+	if gap < 0 {
+		gap = -gap
+	}
+	if gap >= fnDuration {
+		t.Errorf("fn calls appear serial: start gap %v >= fn duration %v", gap, fnDuration)
+	}
+}
+
+func TestDo_ReentrantDifferentKey_NoDeadlock(t *testing.T) {
+	g := NewGroup()
+
+	done := make(chan struct{})
+	go func() {
+		// Outer Do for "pkg-outer"; fn calls Do again for "pkg-inner".
+		// The mutex is released before fn executes, so the nested call must
+		// acquire the lock without contention — no deadlock possible.
+		val, _, err := g.Do("npm", "pkg-outer", "1.0.0", func() ([]byte, error) {
+			inner, _, err := g.Do("npm", "pkg-inner", "1.0.0", func() ([]byte, error) {
+				return []byte("inner-data"), nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return inner, nil
+		})
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if string(val) != "inner-data" {
+			t.Errorf("expected %q, got %q", "inner-data", val)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// completed without deadlock
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock detected: Do did not return within timeout")
+	}
+}
