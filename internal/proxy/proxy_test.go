@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -19,8 +21,9 @@ import (
 // -- mock implementations --
 
 type mockCache struct {
-	getFunc func(ctx context.Context, ecosystem, name, version string) (string, error)
-	setFunc func(ctx context.Context, ecosystem, name, version, checksum string) error
+	getFunc  func(ctx context.Context, ecosystem, name, version string) (string, error)
+	setFunc  func(ctx context.Context, ecosystem, name, version, checksum string) error
+	pingFunc func(ctx context.Context) error
 }
 
 func (m *mockCache) Get(ctx context.Context, ecosystem, name, version string) (string, error) {
@@ -37,14 +40,20 @@ func (m *mockCache) Set(ctx context.Context, ecosystem, name, version, checksum 
 	return nil
 }
 
-func (m *mockCache) Ping(_ context.Context) error { return nil }
+func (m *mockCache) Ping(ctx context.Context) error {
+	if m.pingFunc != nil {
+		return m.pingFunc(ctx)
+	}
+	return nil
+}
 
 type mockDB struct {
 	getPackageCalled    atomic.Bool
 	getPackageFunc      func(ctx context.Context, ecosystem, name, version string) (db.Package, error)
 	upsertPackageCalled atomic.Bool
 	recordEventCalled   atomic.Bool
-	onRecordEvent       func() // called when RecordEvent runs, used to signal goroutine completion
+	onRecordEvent       func()                    // called when RecordEvent runs, used to signal goroutine completion
+	onRecordEventArgs   func(event string, bytes int64) // called with the actual arguments for assertion
 }
 
 func (m *mockDB) GetPackage(ctx context.Context, ecosystem, name, version string) (db.Package, error) {
@@ -62,8 +71,11 @@ func (m *mockDB) UpsertPackage(_ context.Context, _ db.Package) (string, error) 
 	return "", nil
 }
 
-func (m *mockDB) RecordEvent(_ context.Context, _, _, _, _ string, _ int64) error {
+func (m *mockDB) RecordEvent(_ context.Context, _, _, _, event string, bytes int64) error {
 	m.recordEventCalled.Store(true)
+	if m.onRecordEventArgs != nil {
+		m.onRecordEventArgs(event, bytes)
+	}
 	if m.onRecordEvent != nil {
 		m.onRecordEvent()
 	}
@@ -312,6 +324,116 @@ func TestServeHTTP_UpstreamFetch_RedisMiss_DBMiss(t *testing.T) {
 	// and we already confirmed the goroutine completed via RecordEvent
 }
 
+func TestServeHTTP_WriteBack_SecondRequestIsHit(t *testing.T) {
+	const testData = "fake package bytes"
+
+	// in-memory cache: empty until Set is called, then Get returns the stored checksum
+	var cacheMu sync.Mutex
+	cacheStore := make(map[string]string)
+	setCalled := make(chan struct{}, 1)
+
+	cache := &mockCache{
+		getFunc: func(_ context.Context, eco, name, ver string) (string, error) {
+			cacheMu.Lock()
+			defer cacheMu.Unlock()
+			if v, ok := cacheStore[eco+"/"+name+"/"+ver]; ok {
+				return v, nil
+			}
+			return "", errors.New("cache: not found")
+		},
+		setFunc: func(_ context.Context, eco, name, ver, checksum string) error {
+			cacheMu.Lock()
+			cacheStore[eco+"/"+name+"/"+ver] = checksum
+			cacheMu.Unlock()
+			select {
+			case setCalled <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	}
+
+	// in-memory storage: Put stores bytes, Get retrieves them by checksum
+	var storageMu sync.Mutex
+	storageData := make(map[string][]byte)
+
+	store := &mockStorage{
+		getFunc: func(_ context.Context, checksum string) (io.ReadCloser, error) {
+			storageMu.Lock()
+			defer storageMu.Unlock()
+			if data, ok := storageData[checksum]; ok {
+				return io.NopCloser(bytes.NewReader(data)), nil
+			}
+			return nil, errors.New("storage: not found")
+		},
+		putFunc: func(_ context.Context, checksum string, r io.Reader, _ int64) error {
+			data, err := io.ReadAll(r)
+			if err != nil {
+				return err
+			}
+			storageMu.Lock()
+			storageData[checksum] = data
+			storageMu.Unlock()
+			return nil
+		},
+	}
+
+	database := &mockDB{}
+	p := newProxy(t, cache, store, database)
+
+	var upstreamCallCount atomic.Int32
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		upstreamCallCount.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(testData)),
+		}, nil
+	})
+
+	// First request: full cache miss → upstream fetch
+	req1 := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w1 := httptest.NewRecorder()
+	p.ServeHTTP(w1, req1)
+
+	resp1 := w1.Result()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first request: expected status 200, got %d", resp1.StatusCode)
+	}
+	if got := resp1.Header.Get("X-Cache"); got != "miss" {
+		t.Errorf("first request: X-Cache: got %q, want %q", got, "miss")
+	}
+
+	// Wait for the write-back goroutine to populate the cache before the second request
+	select {
+	case <-setCalled:
+	case <-time.After(time.Second):
+		t.Fatal("cache.Set was not called within 1s — write-back goroutine may not have run")
+	}
+
+	// Second request: should be served from Redis cache (write-back already ran)
+	req2 := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(w2, req2)
+
+	resp2 := w2.Result()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("second request: expected status 200, got %d", resp2.StatusCode)
+	}
+	if got := resp2.Header.Get("X-Cache"); got != "hit" {
+		t.Errorf("second request: X-Cache: got %q, want %q", got, "hit")
+	}
+
+	body2, _ := io.ReadAll(resp2.Body)
+	if string(body2) != testData {
+		t.Errorf("second request: body: got %q, want %q", string(body2), testData)
+	}
+
+	// Upstream must only be called once — the second request is served from cache
+	if got := upstreamCallCount.Load(); got != 1 {
+		t.Errorf("upstream called %d times, want exactly 1", got)
+	}
+}
+
 func TestServeHTTP_SingleflightDeduplication(t *testing.T) {
 	const (
 		testData    = "fake package bytes"
@@ -400,5 +522,258 @@ func TestServeHTTP_SingleflightDeduplication(t *testing.T) {
 	case <-goroutineDone:
 	case <-time.After(time.Second):
 		t.Error("write-back goroutine did not complete within 1s")
+	}
+}
+
+func TestRecordEvent_CacheHit(t *testing.T) {
+	const (
+		testChecksum = "abc123"
+		testData     = "fake package bytes"
+	)
+
+	cache := &mockCache{
+		getFunc: func(_ context.Context, _, _, _ string) (string, error) {
+			return testChecksum, nil
+		},
+	}
+
+	store := &mockStorage{
+		getFunc: func(_ context.Context, _ string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(testData)), nil
+		},
+	}
+
+	// goroutineDone is closed when RecordEvent is called, signalling the goroutine has finished
+	goroutineDone := make(chan struct{})
+	var gotEvent string
+	var gotBytes int64
+	database := &mockDB{
+		onRecordEventArgs: func(event string, bytes int64) {
+			gotEvent = event
+			gotBytes = bytes
+		},
+		onRecordEvent: func() { close(goroutineDone) },
+	}
+
+	p := newProxy(t, cache, store, database)
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if got := w.Result().Header.Get("X-Cache"); got != "hit" {
+		t.Fatalf("X-Cache: got %q, want %q", got, "hit")
+	}
+
+	select {
+	case <-goroutineDone:
+	case <-time.After(time.Second):
+		t.Fatal("RecordEvent was not called within 1s")
+	}
+
+	if gotEvent != "hit" {
+		t.Errorf("RecordEvent event: got %q, want %q", gotEvent, "hit")
+	}
+	if gotBytes != int64(len(testData)) {
+		t.Errorf("RecordEvent bytes: got %d, want %d", gotBytes, int64(len(testData)))
+	}
+}
+
+func TestRecordEvent_UpstreamMiss(t *testing.T) {
+	const testData = "fake package bytes"
+
+	// Both Redis and DB miss
+	cache := &mockCache{}
+
+	goroutineDone := make(chan struct{})
+	var gotEvent string
+	var gotBytes int64
+	database := &mockDB{
+		onRecordEventArgs: func(event string, bytes int64) {
+			gotEvent = event
+			gotBytes = bytes
+		},
+		onRecordEvent: func() { close(goroutineDone) },
+	}
+
+	store := &mockStorage{}
+
+	p := newProxy(t, cache, store, database)
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(testData)),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if got := w.Result().Header.Get("X-Cache"); got != "miss" {
+		t.Fatalf("X-Cache: got %q, want %q", got, "miss")
+	}
+
+	select {
+	case <-goroutineDone:
+	case <-time.After(time.Second):
+		t.Fatal("RecordEvent was not called within 1s")
+	}
+
+	if gotEvent != "miss" {
+		t.Errorf("RecordEvent event: got %q, want %q", gotEvent, "miss")
+	}
+	if gotBytes != int64(len(testData)) {
+		t.Errorf("RecordEvent bytes: got %d, want %d", gotBytes, int64(len(testData)))
+	}
+}
+
+func TestRecordEvent_DBError_WarnsAndResponseUnaffected(t *testing.T) {
+	const (
+		testChecksum = "abc123"
+		testData     = "fake package bytes"
+	)
+
+	cache := &mockCache{
+		getFunc: func(_ context.Context, _, _, _ string) (string, error) {
+			return testChecksum, nil
+		},
+	}
+
+	store := &mockStorage{
+		getFunc: func(_ context.Context, _ string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(testData)), nil
+		},
+	}
+
+	database := &mockDB{}
+
+	// warnLogged is closed by the slog handler after it writes the warning, guaranteeing
+	// the buffer is populated before the test reads it.
+	warnLogged := make(chan struct{})
+	var logBuf bytes.Buffer
+	baseHandler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
+
+	router := NewRouter([]string{"npm"})
+	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database})
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Cache"); got != "hit" {
+		t.Errorf("X-Cache: got %q, want %q", got, "hit")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != testData {
+		t.Errorf("body: got %q, want %q", string(body), testData)
+	}
+
+	// Wait until the warning has been written — the handler closes the channel after Handle returns
+	select {
+	case <-warnLogged:
+	case <-time.After(time.Second):
+		t.Fatal("warning was not logged within 1s")
+	}
+
+	if !strings.Contains(logBuf.String(), "record event failed") {
+		t.Errorf("expected warning %q in log output, got: %s", "record event failed", logBuf.String())
+	}
+}
+
+// warnSignalHandler wraps a slog.Handler and calls signal once after it handles any Warn record.
+type warnSignalHandler struct {
+	slog.Handler
+	signal func()
+	once   sync.Once
+}
+
+func (h *warnSignalHandler) Handle(ctx context.Context, r slog.Record) error {
+	err := h.Handler.Handle(ctx, r)
+	if r.Level == slog.LevelWarn {
+		h.once.Do(h.signal)
+	}
+	return err
+}
+
+// errRecordEventDB wraps mockDB and makes RecordEvent always return an error.
+type errRecordEventDB struct {
+	*mockDB
+}
+
+func (e *errRecordEventDB) RecordEvent(_ context.Context, _, _, _, _ string, _ int64) error {
+	e.mockDB.recordEventCalled.Store(true)
+	return errors.New("db: record event failed")
+}
+
+func TestHandleHealth(t *testing.T) {
+	tests := []struct {
+		name        string
+		pingErr     error
+		wantRedis   bool
+	}{
+		{
+			name:      "redis reachable",
+			pingErr:   nil,
+			wantRedis: true,
+		},
+		{
+			name:      "redis unreachable",
+			pingErr:   errors.New("connection refused"),
+			wantRedis: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &mockCache{
+				pingFunc: func(_ context.Context) error { return tc.pingErr },
+			}
+			store := &mockStorage{}
+			database := &mockDB{}
+			p := newProxy(t, cache, store, database)
+
+			req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			w := httptest.NewRecorder()
+			p.ServeHTTP(w, req)
+
+			resp := w.Result()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("expected status 200, got %d", resp.StatusCode)
+			}
+
+			if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type: got %q, want %q", ct, "application/json")
+			}
+
+			var body map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("response is not valid JSON: %v", err)
+			}
+
+			if got := body["status"]; got != "ok" {
+				t.Errorf("status: got %v, want %q", got, "ok")
+			}
+
+			// storage name comes from mockStorage.Name() == "mock"
+			if got := body["storage"]; got != "mock" {
+				t.Errorf("storage: got %v, want %q", got, "mock")
+			}
+
+			// newProxy registers only "npm"
+			if got := body["ecosystems"]; got != "npm" {
+				t.Errorf("ecosystems: got %v, want %q", got, "npm")
+			}
+
+			if got := body["redis"]; got != tc.wantRedis {
+				t.Errorf("redis: got %v, want %v", got, tc.wantRedis)
+			}
+		})
 	}
 }
