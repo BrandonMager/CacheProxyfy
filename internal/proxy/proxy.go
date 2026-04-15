@@ -12,19 +12,29 @@ import (
 
 	"github.com/BrandonMager/CacheProxyfy/internal/ecosystem"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
+	"github.com/BrandonMager/CacheProxyfy/internal/db"
+	"github.com/BrandonMager/CacheProxyfy/internal/singleflight"
 )
 
 type Proxy struct {
 	router *Router
 	storage storage.StorageBackend
+	cache CacheClient
+	db DBClient
+	sf *singleflight.Group
 	client *http.Client
 	logger *slog.Logger
 }
 
-func New(router *Router, store storage.StorageBackend, logger *slog.Logger) *Proxy {
+func New(router *Router, store storage.StorageBackend, logger *slog.Logger,
+	cache CacheClient, db DBClient,
+) *Proxy {
 	return &Proxy {
 		router: router,
 		storage: store,
+		cache: cache,
+		db: db,
+		sf: singleflight.NewGroup(),
 		client: &http.Client {
 			Timeout: 5 * time.Minute,
 		},
@@ -82,25 +92,44 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosystem.Package) ([]byte, string, error) {
-	checksum := pkg.CacheKey()
-	rc, err := p.storage.Get(ctx, checksum)
-	if err == nil {
-		defer rc.Close()
-		data, err := io.ReadAll(rc)
-		if err != nil {
-			return nil, "", fmt.Errorf("reading from storage: %w", err)
+	//Check redis checksum 
+	if checksum, err := p.cache.Get(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil {
+		rc, err := p.storage.Get(ctx, checksum)
+		if err == nil {
+			defer rc.Close()
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return nil, "", fmt.Errorf("reading from storage: %w", err)
+			}
+
+			go func() {
+				p.db.TouchPackage(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version); 
+				p.recordEvent(pkg, "hit", int64(len(data)))
+			}()
+			return data, "hit", nil
 		}
-
-		return data, "hit", nil
 	}
 
-	if err != storage.ErrNotFound {
-		return nil, "", fmt.Errorf("storage lookup: %w", err)
+	if dbPkg, err := p.db.GetPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil {
+		rc, err := p.storage.Get(ctx, dbPkg.Checksum)
+		if err == nil {
+			defer rc.Close()
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return nil, "", fmt.Errorf("reading from storage: %w", err)
+			}
+			go func() {
+				p.cache.Set(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, dbPkg.Checksum)
+				p.recordEvent(pkg, "hit", int64(len(data)))
+			}()
+			return data, "hit", nil
+		}
 	}
+	
+	data, shared, err := p.sf.Do(pkg.Ecosystem, pkg.Name, pkg.Version, func() ([]byte, error) {
+		return p.fetchFromUpstream(ctx, handler, pkg)
+	})
 
-	/* Not in cache so check upstream */
-
-	data, err := p.fetchFromUpstream(ctx, handler, pkg)
 	if err != nil {
 		return nil, "", err
 	}
@@ -109,12 +138,21 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 	if err != nil {
 		return nil, "", fmt.Errorf("rewriting response: %w", err)
 	}
+	if shared {
+		checksum := pkg.CacheKey()
+		p.storage.Put(ctx, checksum, bytes.NewReader(data), int64(len(data)))
+		go func() {
+			p.cache.Set(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, checksum)
+			p.db.UpsertPackage(context.Background(), db.Package{
+				Ecosystem: pkg.Ecosystem,
+				Name: pkg.Name,
+				Version: pkg.Version,
+				Checksum: checksum,
+				SizeBytes: int64(len(data)),
+			})
 
-	if err := p.storage.Put(ctx, checksum, bytes.NewReader(data), int64(len(data))); err != nil {
-		p.logger.Warn("failed to store artifact", 
-			"package", pkg.Name,
-			"error", err,
-		)
+			p.recordEvent(pkg, "miss", int64(len(data)))
+		}()
 	}
 
 	return data, "miss", nil
@@ -151,8 +189,14 @@ func (p *Proxy) fetchFromUpstream(ctx context.Context, handler ecosystem.Handler
 	return data, nil
 }
 
+func (p *Proxy) recordEvent(pkg *ecosystem.Package, event string, bytes int64){
+	if err := p.db.RecordEvent(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, event, bytes); err != nil {
+		p.logger.Warn("record event failed", "package", pkg.Name, "error", err)
+	}
+}
 func (p *Proxy) handleHealth(w http.ResponseWriter, _ *http.Request){
+	redisOk := p.cache.Ping(context.Background()) == nil
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"ok", "storage":%q, "ecosystems":%q}`, p.storage.Name(), strings.Join(p.router.Ecosystems(), ","))
+	fmt.Fprintf(w, `{"status":"ok", "storage":%q, "ecosystems":%q, "redis":%t}`, p.storage.Name(), strings.Join(p.router.Ecosystems(), ","), redisOk)
 }
