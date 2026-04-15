@@ -10,7 +10,7 @@ import (
 
 /* maven-metadata.xml is not included */
 var mavenArtifact = regexp.MustCompile(
-	`^/maven/(.+)/([^/]+)/([^/]+)/(\2-\3(?:-[^.]+)?\.(?:jar|pom))$`,
+	`^/maven/(.+)/([^/]+)/([^/]+)/([^/]+\.(?:jar|pom))$`,
 )
 
 type Maven struct {
@@ -37,14 +37,18 @@ func (m *Maven) Parse(r *http.Request) (*Package, error) {
 	version := matches[3]
 	filename := matches[4]
 
+	if !strings.HasPrefix(filename, artifactID+"-"+version) {
+		return nil, ErrNotPackageRequest
+	}
+
 	name := fmt.Sprintf("%s:%s", groupID, artifactID)
 
 	return &Package{
 		Ecosystem: "maven",
-		Name: name,
-		Version: version,
-		Filename: filename,
-	}
+		Name:      name,
+		Version:   version,
+		Filename:  filename,
+	}, nil
 }
 
 func (m *Maven) UpstreamURL(pkg *Package) string {
