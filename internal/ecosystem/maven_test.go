@@ -63,6 +63,44 @@ func TestMavenParse(t *testing.T) {
 	}
 }
 
+func TestMavenUpstreamURL(t *testing.T) {
+	tests := []struct {
+		name string
+		pkg  *Package
+		want string
+	}{
+		{
+			name: "two-segment groupId",
+			pkg: &Package{
+				Name:     "com.google.guava:guava",
+				Version:  "32.1.2-jre",
+				Filename: "guava-32.1.2-jre.jar",
+			},
+			want: "https://repo1.maven.org/maven2/com/google/guava/guava/32.1.2-jre/guava-32.1.2-jre.jar",
+		},
+		{
+			name: "three-segment groupId",
+			pkg: &Package{
+				Name:     "org.apache.commons:commons-lang3",
+				Version:  "3.13.0",
+				Filename: "commons-lang3-3.13.0.jar",
+			},
+			want: "https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.13.0/commons-lang3-3.13.0.jar",
+		},
+	}
+
+	m := NewMaven()
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := m.UpstreamURL(tc.pkg)
+			if got != tc.want {
+				t.Errorf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestMavenParseErrors(t *testing.T) {
 	tests := []struct {
 		name string
