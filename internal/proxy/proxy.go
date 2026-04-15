@@ -12,7 +12,6 @@ import (
 
 	"github.com/BrandonMager/CacheProxyfy/internal/ecosystem"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
-	"github.com/BrandonMager/CacheProxyfy/internal/cache"
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
 	"github.com/BrandonMager/CacheProxyfy/internal/singleflight"
 )
@@ -20,16 +19,16 @@ import (
 type Proxy struct {
 	router *Router
 	storage storage.StorageBackend
-	cache *cache.Client
-	db *db.DB
+	cache CacheClient
+	db DBClient
 	sf *singleflight.Group
 	client *http.Client
 	logger *slog.Logger
 }
 
-func New(router *Router, store storage.StorageBackend, logger *slog.Logger, 
-		cache *cache.Client, db *db.DB
-	) *Proxy {
+func New(router *Router, store storage.StorageBackend, logger *slog.Logger,
+	cache CacheClient, db DBClient,
+) *Proxy {
 	return &Proxy {
 		router: router,
 		storage: store,
