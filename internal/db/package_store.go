@@ -146,6 +146,20 @@ func (db *DB) RecordEvent(ctx context.Context, ecosystem, name, version, event s
 	return nil
 } 
 
+func (db *DB) RecordCVEAlert(ctx context.Context, ecosystem, name, version, cveID, severity, outcome string) error {
+	const q = `
+		INSERT INTO cve_alerts (ecosystem, name, version, cve_id, severity, outcome)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`
+
+	_, err := db.ExecContext(ctx, q, ecosystem, name, version, cveID, severity, outcome)
+	if err != nil {
+		return fmt.Errorf("db: record cve alert: %w", err)
+	}
+
+	return nil
+}
+
 type Stats struct {
 	TotalPackages int64
 	TotalHits int64

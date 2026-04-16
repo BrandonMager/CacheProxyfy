@@ -9,7 +9,7 @@ import (
 type Config struct {
 	Proxy ProxyConfig `mapstructure:"proxy"`
 	Cache CacheConfig `mapstructure:"cache"`
-	Security SecurityConfig `mapstructure:"log"`
+	Security SecurityConfig `mapstructure:"security"`
 	Log LogConfig `mapstructure:"log"`
 }
 
