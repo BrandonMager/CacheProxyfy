@@ -13,9 +13,13 @@ import (
 	"github.com/BrandonMager/CacheProxyfy/internal/cache"
 	"github.com/BrandonMager/CacheProxyfy/internal/config"
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
+	"github.com/BrandonMager/CacheProxyfy/internal/metrics"
 	"github.com/BrandonMager/CacheProxyfy/internal/proxy"
 	"github.com/BrandonMager/CacheProxyfy/internal/security"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -40,6 +44,15 @@ func run(logger *slog.Logger) error {
 		"backend", cfg.Cache.Backend,
 		"ecosystems", cfg.Proxy.Ecosystems,
 	)
+
+	// Build a dedicated Prometheus registry so we don't pollute the global one.
+	// Register the standard Go runtime and process collectors for free CPU/memory/GC metrics.
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	m := metrics.New(reg)
 
 	store, err := buildStorage(cfg)
 	if err != nil {
@@ -80,26 +93,48 @@ func run(logger *slog.Logger) error {
 	checker := security.NewChecker(cfg.Security.CVEScanning, cfg.Security.BlockSeverity, cfg.Security.WarnSeverity)
 
 	router := proxy.NewRouter(cfg.Proxy.Ecosystems)
-	p := proxy.New(router, store, logger, redisClient, database, checker)
+	p := proxy.New(router, store, logger, redisClient, database, checker, m)
 
-	srv := http.Server{
-		Addr: fmt.Sprintf(":%d", cfg.Proxy.Port),
-		Handler: p,
-		ReadTimeout: 30 * time.Second,
+	// Separate mux: proxy traffic on the main port, /metrics on a dedicated
+	// internal port (9090) so it is never accidentally exposed publicly.
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{
+		EnableOpenMetrics: true, // Enables OpenMetrics text format (superset of Prometheus format)
+	}))
+
+	metricsSrv := &http.Server{
+		Addr:         ":9090",
+		Handler:      metricsMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	proxySrv := http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Proxy.Port),
+		Handler:      p,
+		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 10 * time.Minute,
-		IdleTimeout: 60 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	quit := make(chan os.Signal, 1)
 	// Forward SIGINT (Ctrl+C) and SIGTERM (OS shutdown) into the quit channel
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	go func() {
+		logger.Info("metrics listening", "addr", metricsSrv.Addr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("metrics server error", "error", err)
+			quit <- syscall.SIGTERM
+		}
+	}()
+
 	// Start the HTTP server in a background goroutine so the main goroutine
 	// is free to block on <-quit below. If the server crashes unexpectedly,
 	// send SIGTERM into quit to trigger graceful shutdown.
 	go func() {
-		logger.Info("proxy listening", "addr", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Info("proxy listening", "addr", proxySrv.Addr)
+		if err := proxySrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server error", "error", err)
 			quit <- syscall.SIGTERM
 		}
@@ -112,7 +147,9 @@ func run(logger *slog.Logger) error {
 	logger.Info("shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return srv.Shutdown(ctx)
+
+	metricsSrv.Shutdown(ctx) //nolint:errcheck
+	return proxySrv.Shutdown(ctx)
 }
 
 func buildStorage(cfg *config.Config) (storage.StorageBackend, error) {
