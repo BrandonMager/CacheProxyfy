@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
+	"github.com/BrandonMager/CacheProxyfy/internal/security"
 )
 
 // -- mock implementations --
@@ -52,8 +53,11 @@ type mockDB struct {
 	getPackageFunc      func(ctx context.Context, ecosystem, name, version string) (db.Package, error)
 	upsertPackageCalled atomic.Bool
 	recordEventCalled   atomic.Bool
-	onRecordEvent       func()                    // called when RecordEvent runs, used to signal goroutine completion
+	onRecordEvent       func()                         // called when RecordEvent runs, used to signal goroutine completion
 	onRecordEventArgs   func(event string, bytes int64) // called with the actual arguments for assertion
+	recordCVEAlertCalled atomic.Bool
+	onRecordCVEAlert     func()                                                          // called when RecordCVEAlert runs
+	onRecordCVEAlertArgs func(ecosystem, name, version, cveID, severity, outcome string) // called with the actual arguments for assertion
 }
 
 func (m *mockDB) GetPackage(ctx context.Context, ecosystem, name, version string) (db.Package, error) {
@@ -69,6 +73,17 @@ func (m *mockDB) TouchPackage(_ context.Context, _, _, _ string) error { return 
 func (m *mockDB) UpsertPackage(_ context.Context, _ db.Package) (string, error) {
 	m.upsertPackageCalled.Store(true)
 	return "", nil
+}
+
+func (m *mockDB) RecordCVEAlert(_ context.Context, ecosystem, name, version, cveID, severity, outcome string) error {
+	m.recordCVEAlertCalled.Store(true)
+	if m.onRecordCVEAlertArgs != nil {
+		m.onRecordCVEAlertArgs(ecosystem, name, version, cveID, severity, outcome)
+	}
+	if m.onRecordCVEAlert != nil {
+		m.onRecordCVEAlert()
+	}
+	return nil
 }
 
 func (m *mockDB) RecordEvent(_ context.Context, _, _, _, event string, bytes int64) error {
@@ -107,6 +122,20 @@ func (m *mockStorage) Exists(_ context.Context, _ string) (bool, error) { return
 func (m *mockStorage) Delete(_ context.Context, _ string) error          { return nil }
 func (m *mockStorage) Name() string                                       { return "mock" }
 
+// mockSecurityChecker always allows — security behavior is tested separately.
+type mockSecurityChecker struct {
+	checkCalled atomic.Bool
+	checkFunc   func(ctx context.Context, ecosystem, name, version string) (security.Outcome, []security.CVERecord, error)
+}
+
+func (m *mockSecurityChecker) Check(ctx context.Context, ecosystem, name, version string) (security.Outcome, []security.CVERecord, error) {
+	m.checkCalled.Store(true)
+	if m.checkFunc != nil {
+		return m.checkFunc(ctx, ecosystem, name, version)
+	}
+	return security.Allow, nil, nil
+}
+
 // roundTripFunc lets a test intercept outbound HTTP requests without a real server.
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -116,7 +145,7 @@ func newProxy(t *testing.T, cache CacheClient, store *mockStorage, database *moc
 	t.Helper()
 	router := NewRouter([]string{"npm"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(router, store, logger, cache, database)
+	return New(router, store, logger, cache, database, &mockSecurityChecker{})
 }
 
 // -- tests --
@@ -656,7 +685,7 @@ func TestRecordEvent_DBError_WarnsAndResponseUnaffected(t *testing.T) {
 	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
 
 	router := NewRouter([]string{"npm"})
-	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database})
+	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database}, &mockSecurityChecker{})
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
 	w := httptest.NewRecorder()
@@ -775,5 +804,349 @@ func TestHandleHealth(t *testing.T) {
 				t.Errorf("redis: got %v, want %v", got, tc.wantRedis)
 			}
 		})
+	}
+}
+
+func TestServeHTTP_CVEScanningDisabled_PackagePassesThrough(t *testing.T) {
+	const testData = "fake package bytes"
+
+	// Security checker simulates cve_scanning: false — returns Allow with no records.
+	checker := &mockSecurityChecker{}
+
+	cache := &mockCache{}
+	database := &mockDB{}
+	goroutineDone := make(chan struct{})
+	database.onRecordEvent = func() { close(goroutineDone) }
+
+	store := &mockStorage{}
+
+	router := NewRouter([]string{"npm"})
+
+	// Capture warn-level logs to assert no security warning is emitted.
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	p := New(router, store, logger, cache, database, checker)
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(testData)),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	resp := w.Result()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	if got := resp.Header.Get("X-Cache"); got != "miss" {
+		t.Errorf("X-Cache: got %q, want %q", got, "miss")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != testData {
+		t.Errorf("body: got %q, want %q", string(body), testData)
+	}
+
+	if !checker.checkCalled.Load() {
+		t.Error("security.Check was not called")
+	}
+
+	// Wait for the write-back goroutine to finish before reading the log buffer.
+	select {
+	case <-goroutineDone:
+	case <-time.After(time.Second):
+		t.Fatal("write-back goroutine did not complete within 1s")
+	}
+
+	if log := logBuf.String(); strings.Contains(log, "vulnerabilities") || strings.Contains(log, "blocked") {
+		t.Errorf("unexpected security warning in log output: %s", log)
+	}
+}
+
+func TestServeHTTP_CVEScanningEnabled_WarnPolicy_PackagePassesThrough(t *testing.T) {
+	const testData = "fake package bytes"
+
+	// Security checker simulates cve_scanning: true with policy: warn —
+	// returns Warn with one CVE record, as the OSV scanner would for a vulnerable package.
+	cveRecords := []security.CVERecord{
+		{ID: "GHSA-jf85-cpcp-j695", Summary: "Prototype pollution in lodash", Severity: security.SeverityHigh},
+	}
+	checker := &mockSecurityChecker{
+		checkFunc: func(_ context.Context, _, _, _ string) (security.Outcome, []security.CVERecord, error) {
+			return security.Warn, cveRecords, nil
+		},
+	}
+
+	cache := &mockCache{}
+	database := &mockDB{}
+	goroutineDone := make(chan struct{})
+	database.onRecordEvent = func() { close(goroutineDone) }
+
+	store := &mockStorage{}
+
+	router := NewRouter([]string{"npm"})
+
+	warnLogged := make(chan struct{})
+	var logBuf bytes.Buffer
+	baseHandler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
+
+	p := New(router, store, logger, cache, database, checker)
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(testData)),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	resp := w.Result()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	if got := resp.Header.Get("X-Cache"); got != "miss" {
+		t.Errorf("X-Cache: got %q, want %q", got, "miss")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != testData {
+		t.Errorf("body: got %q, want %q", string(body), testData)
+	}
+
+	// Wait for the security warning to be logged before inspecting the buffer.
+	select {
+	case <-warnLogged:
+	case <-time.After(time.Second):
+		t.Fatal("security warning was not logged within 1s")
+	}
+
+	if log := logBuf.String(); !strings.Contains(log, "known vulnerabilities") {
+		t.Errorf("expected security warning in log output, got: %s", log)
+	}
+
+	// Wait for the write-back goroutine to finish.
+	select {
+	case <-goroutineDone:
+	case <-time.After(time.Second):
+		t.Fatal("write-back goroutine did not complete within 1s")
+	}
+}
+
+func TestServeHTTP_CVEScanningEnabled_BlockPolicy_RequestRejected(t *testing.T) {
+	// Security checker simulates cve_scanning: true with a block-level policy —
+	// returns Block with one critical CVE record.
+	cveRecords := []security.CVERecord{
+		{ID: "GHSA-jf85-cpcp-j695", Summary: "Prototype pollution in lodash", Severity: security.SeverityCritical},
+	}
+	checker := &mockSecurityChecker{
+		checkFunc: func(_ context.Context, _, _, _ string) (security.Outcome, []security.CVERecord, error) {
+			return security.Block, cveRecords, nil
+		},
+	}
+
+	cache := &mockCache{}
+	database := &mockDB{}
+
+	// recordCVEAlerts runs in a goroutine — wait for it before the test exits.
+	cveAlertDone := make(chan struct{})
+	database.onRecordEvent = func() { close(cveAlertDone) }
+
+	store := &mockStorage{}
+
+	router := NewRouter([]string{"npm"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	upstreamCalled := false
+	p := New(router, store, logger, cache, database, checker)
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		upstreamCalled = true
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("should not reach client")),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	resp := w.Result()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("expected status 502, got %d", resp.StatusCode)
+	}
+
+	if upstreamCalled {
+		t.Error("upstream should not be called when package is blocked")
+	}
+
+	if !checker.checkCalled.Load() {
+		t.Error("security.Check was not called")
+	}
+}
+
+func TestRecordCVEAlert_InsertedAfterVulnerableScan(t *testing.T) {
+	const (
+		testEco     = "npm"
+		testName    = "lodash"
+		testVersion = "4.17.21"
+		testCVEID   = "GHSA-jf85-cpcp-j695"
+	)
+
+	cveRecords := []security.CVERecord{
+		{ID: testCVEID, Summary: "Prototype pollution in lodash", Severity: security.SeverityHigh},
+	}
+	checker := &mockSecurityChecker{
+		checkFunc: func(_ context.Context, _, _, _ string) (security.Outcome, []security.CVERecord, error) {
+			return security.Warn, cveRecords, nil
+		},
+	}
+
+	// Signal when RecordCVEAlert is called and capture its arguments for assertion.
+	cveAlertDone := make(chan struct{})
+	var gotEco, gotName, gotVersion, gotCVEID, gotSeverity, gotOutcome string
+	database := &mockDB{
+		onRecordCVEAlertArgs: func(ecosystem, name, version, cveID, severity, outcome string) {
+			gotEco, gotName, gotVersion, gotCVEID, gotSeverity, gotOutcome = ecosystem, name, version, cveID, severity, outcome
+		},
+		onRecordCVEAlert: func() { close(cveAlertDone) },
+	}
+
+	// Also wait for the write-back goroutine (RecordEvent is its last call).
+	writeDone := make(chan struct{})
+	database.onRecordEvent = func() { close(writeDone) }
+
+	cache := &mockCache{}
+	store := &mockStorage{}
+	router := NewRouter([]string{"npm"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	p := New(router, store, logger, cache, database, checker)
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("fake package bytes")),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	// Wait for RecordCVEAlert goroutine to complete.
+	select {
+	case <-cveAlertDone:
+	case <-time.After(time.Second):
+		t.Fatal("RecordCVEAlert was not called within 1s")
+	}
+
+	if !database.recordCVEAlertCalled.Load() {
+		t.Error("db.RecordCVEAlert was not called")
+	}
+	if gotEco != testEco {
+		t.Errorf("ecosystem: got %q, want %q", gotEco, testEco)
+	}
+	if gotName != testName {
+		t.Errorf("name: got %q, want %q", gotName, testName)
+	}
+	if gotVersion != testVersion {
+		t.Errorf("version: got %q, want %q", gotVersion, testVersion)
+	}
+	if gotCVEID != testCVEID {
+		t.Errorf("cveID: got %q, want %q", gotCVEID, testCVEID)
+	}
+	if gotSeverity != "HIGH" {
+		t.Errorf("severity: got %q, want %q", gotSeverity, "HIGH")
+	}
+	if gotOutcome != "warn" {
+		t.Errorf("outcome: got %q, want %q", gotOutcome, "warn")
+	}
+
+	// Wait for write-back goroutine to finish cleanly.
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("write-back goroutine did not complete within 1s")
+	}
+}
+
+func TestServeHTTP_OSVRequestFailed_WarnsAndPackageServed(t *testing.T) {
+	const testData = "fake package bytes"
+
+	// Security checker simulates a failed OSV request — returns Allow + error (fail-open).
+	checker := &mockSecurityChecker{
+		checkFunc: func(_ context.Context, _, _, _ string) (security.Outcome, []security.CVERecord, error) {
+			return security.Allow, nil, errors.New("security: osv request: connection refused")
+		},
+	}
+
+	cache := &mockCache{}
+	database := &mockDB{}
+	writeDone := make(chan struct{})
+	database.onRecordEvent = func() { close(writeDone) }
+
+	store := &mockStorage{}
+	router := NewRouter([]string{"npm"})
+
+	warnLogged := make(chan struct{})
+	var logBuf bytes.Buffer
+	baseHandler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
+
+	p := New(router, store, logger, cache, database, checker)
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(testData)),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	resp := w.Result()
+
+	// Package is still served despite the OSV failure (fail-open).
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	if got := resp.Header.Get("X-Cache"); got != "miss" {
+		t.Errorf("X-Cache: got %q, want %q", got, "miss")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != testData {
+		t.Errorf("body: got %q, want %q", string(body), testData)
+	}
+
+	// Wait for the warning to be written before inspecting the log buffer.
+	select {
+	case <-warnLogged:
+	case <-time.After(time.Second):
+		t.Fatal("security warning was not logged within 1s")
+	}
+
+	if log := logBuf.String(); !strings.Contains(log, "security check failed") {
+		t.Errorf("expected %q in log output, got: %s", "security check failed", log)
+	}
+
+	// Wait for the write-back goroutine to finish cleanly.
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("write-back goroutine did not complete within 1s")
 	}
 }

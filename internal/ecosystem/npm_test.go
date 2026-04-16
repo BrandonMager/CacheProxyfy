@@ -23,10 +23,11 @@ func TestNPMParse(t *testing.T) {
 			wantFile:    "lodash-4.17.21.tgz",
 		},
 		{
-			// regex `@[^/]+[^/]+` does not cross the `/` in @scope/name
-			name:    "scoped package (regex does not support @scope/name)",
-			path:    "/npm/@babel/core/-/core-7.0.0.tgz",
-			wantErr: ErrNotPackageRequest,
+			name:        "scoped package",
+			path:        "/npm/@babel/core/-/core-7.0.0.tgz",
+			wantName:    "@babel/core",
+			wantVersion: "7.0.0",
+			wantFile:    "core-7.0.0.tgz",
 		},
 		{
 			name:    "metadata request, not a tarball",

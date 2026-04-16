@@ -10,10 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BrandonMager/CacheProxyfy/internal/ecosystem"
-	"github.com/BrandonMager/CacheProxyfy/internal/storage"
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
+	"github.com/BrandonMager/CacheProxyfy/internal/ecosystem"
+	"github.com/BrandonMager/CacheProxyfy/internal/security"
 	"github.com/BrandonMager/CacheProxyfy/internal/singleflight"
+	"github.com/BrandonMager/CacheProxyfy/internal/storage"
 )
 
 type Proxy struct {
@@ -21,19 +22,21 @@ type Proxy struct {
 	storage storage.StorageBackend
 	cache CacheClient
 	db DBClient
+	security SecurityChecker
 	sf *singleflight.Group
 	client *http.Client
 	logger *slog.Logger
 }
 
 func New(router *Router, store storage.StorageBackend, logger *slog.Logger,
-	cache CacheClient, db DBClient,
+	cache CacheClient, db DBClient, security SecurityChecker,
 ) *Proxy {
 	return &Proxy {
 		router: router,
 		storage: store,
 		cache: cache,
 		db: db,
+		security: security,
 		sf: singleflight.NewGroup(),
 		client: &http.Client {
 			Timeout: 5 * time.Minute,
@@ -126,6 +129,26 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 		}
 	}
 	
+	outcome, records, err := p.security.Check(ctx, pkg.Ecosystem, pkg.Name, pkg.Version)
+	if err != nil {
+		p.logger.Warn("security check failed", "package", pkg.Name, "error", err)
+	}
+
+	go p.recordCVEAlerts(pkg, outcome, records)
+
+	if outcome == security.Block {
+		return nil, "", fmt.Errorf("package blocked by security policy: %s@%s", pkg.Name, pkg.Version)
+	}
+
+	if outcome == security.Warn {
+		p.logger.Warn("package has known vulnerabilities",
+			"ecosystem", pkg.Ecosystem,
+			"package", pkg.Name,
+			"version", pkg.Version,
+			"cves", len(records),
+		)
+	}
+
 	data, shared, err := p.sf.Do(pkg.Ecosystem, pkg.Name, pkg.Version, func() ([]byte, error) {
 		return p.fetchFromUpstream(ctx, handler, pkg)
 	})
@@ -194,6 +217,14 @@ func (p *Proxy) recordEvent(pkg *ecosystem.Package, event string, bytes int64){
 		p.logger.Warn("record event failed", "package", pkg.Name, "error", err)
 	}
 }
+func (p *Proxy) recordCVEAlerts(pkg *ecosystem.Package, outcome security.Outcome, records []security.CVERecord) {
+	for _, r := range records {
+		if err := p.db.RecordCVEAlert(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, r.ID, r.Severity.String(), outcome.String()); err != nil {
+			p.logger.Warn("record cve alert failed", "package", pkg.Name, "cve", r.ID, "error", err)
+		}
+	}
+}
+
 func (p *Proxy) handleHealth(w http.ResponseWriter, _ *http.Request){
 	redisOk := p.cache.Ping(context.Background()) == nil
 	w.Header().Set("Content-Type", "application/json")

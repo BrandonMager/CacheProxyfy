@@ -90,5 +90,21 @@ const schema = `
 
 	CREATE INDEX IF NOT EXISTS cache_events_recorded_at
 		ON cache_events (recorded_at DESC);
-	
+
+	CREATE TABLE IF NOT EXISTS cve_alerts (
+		id BIGSERIAL PRIMARY KEY,
+		ecosystem TEXT NOT NULL,
+		name TEXT NOT NULL,
+		version TEXT NOT NULL,
+		cve_id TEXT NOT NULL,
+		severity TEXT NOT NULL,
+		outcome TEXT NOT NULL,
+		recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE INDEX IF NOT EXISTS cve_alerts_recorded_at
+		ON cve_alerts (recorded_at DESC);
+
+	CREATE INDEX IF NOT EXISTS cve_alerts_ecosystem_name
+		ON cve_alerts (ecosystem, name);
 `

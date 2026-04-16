@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
+	"github.com/BrandonMager/CacheProxyfy/internal/security"
 )
 
 type CacheClient interface {
@@ -17,4 +18,9 @@ type DBClient interface {
 	TouchPackage(ctx context.Context, ecosystem, name, version string) error
 	UpsertPackage(ctx context.Context, pkg db.Package) (string, error)
 	RecordEvent(ctx context.Context, ecosystem, name, version, event string, bytes int64) error
+	RecordCVEAlert(ctx context.Context, ecosystem, name, version, cveID, severity, outcome string) error
+}
+
+type SecurityChecker interface {
+	Check(ctx context.Context, ecosystem, name, version string) (security.Outcome, []security.CVERecord, error)
 }
