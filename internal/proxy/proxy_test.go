@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
+	"github.com/BrandonMager/CacheProxyfy/internal/security"
 )
 
 // -- mock implementations --
@@ -71,6 +72,8 @@ func (m *mockDB) UpsertPackage(_ context.Context, _ db.Package) (string, error) 
 	return "", nil
 }
 
+func (m *mockDB) RecordCVEAlert(_ context.Context, _, _, _, _, _, _ string) error { return nil }
+
 func (m *mockDB) RecordEvent(_ context.Context, _, _, _, event string, bytes int64) error {
 	m.recordEventCalled.Store(true)
 	if m.onRecordEventArgs != nil {
@@ -107,6 +110,13 @@ func (m *mockStorage) Exists(_ context.Context, _ string) (bool, error) { return
 func (m *mockStorage) Delete(_ context.Context, _ string) error          { return nil }
 func (m *mockStorage) Name() string                                       { return "mock" }
 
+// mockSecurityChecker always allows — security behavior is tested separately.
+type mockSecurityChecker struct{}
+
+func (m *mockSecurityChecker) Check(_ context.Context, _, _, _ string) (security.Outcome, []security.CVERecord, error) {
+	return security.Allow, nil, nil
+}
+
 // roundTripFunc lets a test intercept outbound HTTP requests without a real server.
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -116,7 +126,7 @@ func newProxy(t *testing.T, cache CacheClient, store *mockStorage, database *moc
 	t.Helper()
 	router := NewRouter([]string{"npm"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(router, store, logger, cache, database)
+	return New(router, store, logger, cache, database, &mockSecurityChecker{})
 }
 
 // -- tests --
@@ -656,7 +666,7 @@ func TestRecordEvent_DBError_WarnsAndResponseUnaffected(t *testing.T) {
 	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
 
 	router := NewRouter([]string{"npm"})
-	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database})
+	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database}, &mockSecurityChecker{})
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
 	w := httptest.NewRecorder()
