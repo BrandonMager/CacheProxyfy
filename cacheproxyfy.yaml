@@ -31,4 +31,6 @@ database:
   sslmode: disable
 
 security:
-  cve_scanning: false #for now
+  cve_scanning: false
+  block_severity: CRITICAL
+  warn_severity: HIGH
