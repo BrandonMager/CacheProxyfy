@@ -6,8 +6,29 @@ proxy:
     - maven 
 
 cache:
-  backend: local
+  backend: local       # "local" or "s3"
   local_dir: ./data/artifacts
+
+s3:
+  bucket: ""           # required when backend=s3
+  region: us-east-1
+  endpoint: ""         # optional: override for MinIO / LocalStack
+  key_prefix: ""       # optional: e.g. "artifacts"
+  access_key_id: ""    # optional: falls back to env vars / IAM role
+  secret_access_key: ""
+
+redis:
+  addr: localhost:6379
+  password: ""
+  db: 0
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: ""
+  dbname: cacheproxyfy
+  sslmode: disable
 
 security:
   cve_scanning: false #for now

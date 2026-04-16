@@ -83,13 +83,19 @@ func run(logger *slog.Logger) error {
 
 func buildStorage(cfg *config.Config) (storage.StorageBackend, error) {
 	switch cfg.Cache.Backend {
-		case "local":
-			return storage.NewLocal(cfg.Cache.LocalDir)
-		case "s3":
-			return nil, fmt.Errorf("S3 not yet implemented...")
-
-		default:
-			return nil, fmt.Errorf("Unknown storage backend: %q", cfg.Cache.Backend)
+	case "local":
+		return storage.NewLocal(cfg.Cache.LocalDir)
+	case "s3":
+		return storage.NewS3(context.Background(), storage.S3Config{
+			Bucket:          cfg.S3.Bucket,
+			Region:          cfg.S3.Region,
+			Endpoint:        cfg.S3.Endpoint,
+			KeyPrefix:       cfg.S3.KeyPrefix,
+			AccessKeyID:     cfg.S3.AccessKeyID,
+			SecretAccessKey: cfg.S3.SecretAccessKey,
+		})
+	default:
+		return nil, fmt.Errorf("Unknown storage backend: %q", cfg.Cache.Backend)
 	}
 }
 
