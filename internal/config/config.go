@@ -52,8 +52,9 @@ type DatabaseConfig struct {
 }
 
 type SecurityConfig struct {
-	CVEScanning bool `mapstructure:"cve_scanning"`
-	Policy string `mapstructure:"policy"`
+	CVEScanning   bool   `mapstructure:"cve_scanning"`
+	BlockSeverity string `mapstructure:"block_severity"`
+	WarnSeverity  string `mapstructure:"warn_severity"`
 }
 
 type LogConfig struct {
@@ -86,7 +87,8 @@ func Load() (*Config, error) {
 	v.SetDefault("database.sslmode", "disable")
 
 	v.SetDefault("security.cve_scanning", false)
-	v.SetDefault("security.policy", "warn")
+	v.SetDefault("security.block_severity", "CRITICAL")
+	v.SetDefault("security.warn_severity", "HIGH")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 
