@@ -1,6 +1,6 @@
 package main
 
-import ( 
+import (
 	"context"
 	"fmt"
 	"log/slog"
@@ -10,8 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BrandonMager/CacheProxyfy/internal/cache"
 	"github.com/BrandonMager/CacheProxyfy/internal/config"
+	"github.com/BrandonMager/CacheProxyfy/internal/db"
 	"github.com/BrandonMager/CacheProxyfy/internal/proxy"
+	"github.com/BrandonMager/CacheProxyfy/internal/security"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
 )
 
@@ -32,20 +35,52 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	logger.Info("CacheProxyfy starting", 
+	logger.Info("CacheProxyfy starting",
 		"port", cfg.Proxy.Port,
 		"backend", cfg.Cache.Backend,
 		"ecosystems", cfg.Proxy.Ecosystems,
 	)
+
 	store, err := buildStorage(cfg)
 	if err != nil {
 		return fmt.Errorf("building storage: %w", err)
 	}
-
 	logger.Info("storage ready", "backend", store.Name())
 
+	redisClient, err := cache.New(cache.Config{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+		TTL:      time.Duration(cfg.Cache.TTLHours) * time.Hour,
+	})
+	if err != nil {
+		return fmt.Errorf("connecting to redis: %w", err)
+	}
+	defer redisClient.Close()
+	logger.Info("cache ready", "addr", cfg.Redis.Addr)
+
+	database, err := db.Open(db.Config{
+		Host:     cfg.Database.Host,
+		Port:     cfg.Database.Port,
+		User:     cfg.Database.User,
+		Password: cfg.Database.Password,
+		DBName:   cfg.Database.DBName,
+		SSLMode:  cfg.Database.SSLMode,
+	})
+	if err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
+	defer database.Close()
+
+	if err := database.Migrate(context.Background()); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+	logger.Info("database ready", "host", cfg.Database.Host)
+
+	checker := security.NewChecker(cfg.Security.CVEScanning, cfg.Security.BlockSeverity, cfg.Security.WarnSeverity)
+
 	router := proxy.NewRouter(cfg.Proxy.Ecosystems)
-	p := proxy.New(router, store, logger)
+	p := proxy.New(router, store, logger, redisClient, database, checker)
 
 	srv := http.Server{
 		Addr: fmt.Sprintf(":%d", cfg.Proxy.Port),
@@ -67,7 +102,6 @@ func run(logger *slog.Logger) error {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server error", "error", err)
 			quit <- syscall.SIGTERM
-
 		}
 	}()
 
@@ -76,20 +110,25 @@ func run(logger *slog.Logger) error {
 
 	// Signal received — begin graceful shutdown with a 15-second deadline
 	logger.Info("shutting down...")
-	ctx, cancel := context.WithTimeout(context.Background(), 15 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return srv.Shutdown(ctx)
 }
 
 func buildStorage(cfg *config.Config) (storage.StorageBackend, error) {
 	switch cfg.Cache.Backend {
-		case "local":
-			return storage.NewLocal(cfg.Cache.LocalDir)
-		case "s3":
-			return nil, fmt.Errorf("S3 not yet implemented...")
-
-		default:
-			return nil, fmt.Errorf("Unknown storage backend: %q", cfg.Cache.Backend)
+	case "local":
+		return storage.NewLocal(cfg.Cache.LocalDir)
+	case "s3":
+		return storage.NewS3(context.Background(), storage.S3Config{
+			Bucket:          cfg.S3.Bucket,
+			Region:          cfg.S3.Region,
+			Endpoint:        cfg.S3.Endpoint,
+			KeyPrefix:       cfg.S3.KeyPrefix,
+			AccessKeyID:     cfg.S3.AccessKeyID,
+			SecretAccessKey: cfg.S3.SecretAccessKey,
+		})
+	default:
+		return nil, fmt.Errorf("Unknown storage backend: %q", cfg.Cache.Backend)
 	}
 }
-
