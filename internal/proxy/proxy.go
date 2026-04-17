@@ -12,36 +12,39 @@ import (
 
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
 	"github.com/BrandonMager/CacheProxyfy/internal/ecosystem"
+	"github.com/BrandonMager/CacheProxyfy/internal/metrics"
 	"github.com/BrandonMager/CacheProxyfy/internal/security"
 	"github.com/BrandonMager/CacheProxyfy/internal/singleflight"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
 )
 
 type Proxy struct {
-	router *Router
-	storage storage.StorageBackend
-	cache CacheClient
-	db DBClient
+	router   *Router
+	storage  storage.StorageBackend
+	cache    CacheClient
+	db       DBClient
 	security SecurityChecker
-	sf *singleflight.Group
-	client *http.Client
-	logger *slog.Logger
+	sf       *singleflight.Group
+	client   *http.Client
+	logger   *slog.Logger
+	metrics  *metrics.Metrics
 }
 
 func New(router *Router, store storage.StorageBackend, logger *slog.Logger,
-	cache CacheClient, db DBClient, security SecurityChecker,
+	cache CacheClient, db DBClient, security SecurityChecker, m *metrics.Metrics,
 ) *Proxy {
-	return &Proxy {
-		router: router,
-		storage: store,
-		cache: cache,
-		db: db,
+	return &Proxy{
+		router:   router,
+		storage:  store,
+		cache:    cache,
+		db:       db,
 		security: security,
-		sf: singleflight.NewGroup(),
-		client: &http.Client {
+		sf:       singleflight.NewGroup(),
+		client: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
-		logger: logger,
+		logger:  logger,
+		metrics: m,
 	}
 }
 
@@ -70,22 +73,36 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	p.metrics.InflightRequests.Inc()
+	defer p.metrics.InflightRequests.Dec()
+
 	data, cacheStatus, err := p.serve(r.Context(), handler, pkg)
+
+	elapsed := time.Since(start).Seconds()
+	result := cacheStatus
+	if err != nil {
+		result = "error"
+	}
+	p.metrics.RequestsTotal.WithLabelValues(ecoName, result).Inc()
+	p.metrics.RequestDuration.WithLabelValues(ecoName, result).Observe(elapsed)
+
 	if err != nil {
 		p.logger.Error("serve failed",
 			"ecosystem", ecoName, "package", pkg.Name, "error", err,
 		)
-
 		http.Error(w, "upstream fetch failed", http.StatusBadGateway)
 		return
 	}
+
+	p.metrics.BytesServedTotal.WithLabelValues(ecoName, cacheStatus).Add(float64(len(data)))
+	p.metrics.PackageSizeBytes.WithLabelValues(ecoName).Observe(float64(len(data)))
 
 	w.Header().Set("X-Cache", cacheStatus)
 	w.Header().Set("x-CacheProxyfy-Ecosystem", ecoName)
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 
-	p.logger.Info("served", 
+	p.logger.Info("served",
 		"ecosystem", ecoName,
 		"package", pkg.Name,
 		"version", pkg.Version,
@@ -95,7 +112,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosystem.Package) ([]byte, string, error) {
-	//Check redis checksum 
+	// Check redis checksum
 	if checksum, err := p.cache.Get(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil {
 		rc, err := p.storage.Get(ctx, checksum)
 		if err == nil {
@@ -106,7 +123,7 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 			}
 
 			go func() {
-				p.db.TouchPackage(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version); 
+				p.db.TouchPackage(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version)
 				p.recordEvent(pkg, "hit", int64(len(data)))
 			}()
 			return data, "hit", nil
@@ -128,10 +145,13 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 			return data, "hit", nil
 		}
 	}
-	
+
 	outcome, records, err := p.security.Check(ctx, pkg.Ecosystem, pkg.Name, pkg.Version)
 	if err != nil {
 		p.logger.Warn("security check failed", "package", pkg.Name, "error", err)
+		p.metrics.CVEScansTotal.WithLabelValues(pkg.Ecosystem, "error").Inc()
+	} else {
+		p.metrics.CVEScansTotal.WithLabelValues(pkg.Ecosystem, outcome.String()).Inc()
 	}
 
 	go p.recordCVEAlerts(pkg, outcome, records)
@@ -149,9 +169,23 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 		)
 	}
 
+	var fetchDuration time.Duration
 	data, shared, err := p.sf.Do(pkg.Ecosystem, pkg.Name, pkg.Version, func() ([]byte, error) {
-		return p.fetchFromUpstream(ctx, handler, pkg)
+		fetchStart := time.Now()
+		result, fetchErr := p.fetchFromUpstream(ctx, handler, pkg)
+		fetchDuration = time.Since(fetchStart)
+		return result, fetchErr
 	})
+
+	// Only the singleflight leader performs a real upstream fetch — record it once.
+	if shared {
+		if err != nil {
+			p.metrics.UpstreamFetchesTotal.WithLabelValues(pkg.Ecosystem, "error").Inc()
+		} else {
+			p.metrics.UpstreamFetchesTotal.WithLabelValues(pkg.Ecosystem, "ok").Inc()
+			p.metrics.UpstreamFetchDuration.WithLabelValues(pkg.Ecosystem).Observe(fetchDuration.Seconds())
+		}
+	}
 
 	if err != nil {
 		return nil, "", err
@@ -168,9 +202,9 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 			p.cache.Set(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, checksum)
 			p.db.UpsertPackage(context.Background(), db.Package{
 				Ecosystem: pkg.Ecosystem,
-				Name: pkg.Name,
-				Version: pkg.Version,
-				Checksum: checksum,
+				Name:      pkg.Name,
+				Version:   pkg.Version,
+				Checksum:  checksum,
 				SizeBytes: int64(len(data)),
 			})
 
@@ -212,11 +246,12 @@ func (p *Proxy) fetchFromUpstream(ctx context.Context, handler ecosystem.Handler
 	return data, nil
 }
 
-func (p *Proxy) recordEvent(pkg *ecosystem.Package, event string, bytes int64){
+func (p *Proxy) recordEvent(pkg *ecosystem.Package, event string, bytes int64) {
 	if err := p.db.RecordEvent(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, event, bytes); err != nil {
 		p.logger.Warn("record event failed", "package", pkg.Name, "error", err)
 	}
 }
+
 func (p *Proxy) recordCVEAlerts(pkg *ecosystem.Package, outcome security.Outcome, records []security.CVERecord) {
 	for _, r := range records {
 		if err := p.db.RecordCVEAlert(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, r.ID, r.Severity.String(), outcome.String()); err != nil {
@@ -225,7 +260,7 @@ func (p *Proxy) recordCVEAlerts(pkg *ecosystem.Package, outcome security.Outcome
 	}
 }
 
-func (p *Proxy) handleHealth(w http.ResponseWriter, _ *http.Request){
+func (p *Proxy) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	redisOk := p.cache.Ping(context.Background()) == nil
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
