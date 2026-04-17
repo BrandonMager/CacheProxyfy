@@ -52,7 +52,7 @@ func run(logger *slog.Logger) error {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	m := metrics.New(reg)
+	m := metrics.New(reg, cfg.Proxy.Ecosystems)
 
 	store, err := buildStorage(cfg)
 	if err != nil {
@@ -103,7 +103,7 @@ func run(logger *slog.Logger) error {
 	}))
 
 	metricsSrv := &http.Server{
-		Addr:         ":9090",
+		Addr:         "127.0.0.1:9090",
 		Handler:      metricsMux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,

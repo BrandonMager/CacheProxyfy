@@ -16,7 +16,10 @@ import (
 	"time"
 
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
+	"github.com/BrandonMager/CacheProxyfy/internal/metrics"
 	"github.com/BrandonMager/CacheProxyfy/internal/security"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // -- mock implementations --
@@ -141,11 +144,12 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func newProxy(t *testing.T, cache CacheClient, store *mockStorage, database *mockDB) *Proxy {
+func newProxy(t *testing.T, cache CacheClient, store *mockStorage, database *mockDB) (*Proxy, *metrics.Metrics) {
 	t.Helper()
 	router := NewRouter([]string{"npm"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(router, store, logger, cache, database, &mockSecurityChecker{})
+	m := metrics.New(prometheus.NewRegistry(), []string{})
+	return New(router, store, logger, cache, database, &mockSecurityChecker{}, m), m
 }
 
 // -- tests --
@@ -172,7 +176,7 @@ func TestServeHTTP_RedisHit(t *testing.T) {
 	}
 
 	database := &mockDB{}
-	p := newProxy(t, cache, store, database)
+	p, _ := newProxy(t, cache, store, database)
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
 	w := httptest.NewRecorder()
@@ -247,7 +251,7 @@ func TestServeHTTP_DBHit_RedisMiss(t *testing.T) {
 		}, nil
 	}
 
-	p := newProxy(t, cache, store, database)
+	p, _ := newProxy(t, cache, store, database)
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
 	w := httptest.NewRecorder()
@@ -294,7 +298,7 @@ func TestServeHTTP_UpstreamFetch_RedisMiss_DBMiss(t *testing.T) {
 
 	store := &mockStorage{}
 
-	p := newProxy(t, cache, store, database)
+	p, _ := newProxy(t, cache, store, database)
 
 	// Intercept the outbound HTTP call — p.client is accessible from the same package
 	upstreamCalled := false
@@ -408,7 +412,7 @@ func TestServeHTTP_WriteBack_SecondRequestIsHit(t *testing.T) {
 	}
 
 	database := &mockDB{}
-	p := newProxy(t, cache, store, database)
+	p, _ := newProxy(t, cache, store, database)
 
 	var upstreamCallCount atomic.Int32
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -482,7 +486,7 @@ func TestServeHTTP_SingleflightDeduplication(t *testing.T) {
 	goroutineDone := make(chan struct{})
 	database.onRecordEvent = func() { close(goroutineDone) }
 
-	p := newProxy(t, cache, store, database)
+	p, m := newProxy(t, cache, store, database)
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamCallCount.Add(1)
 		<-release // block until all goroutines have queued up
@@ -532,6 +536,13 @@ func TestServeHTTP_SingleflightDeduplication(t *testing.T) {
 
 	if got := upstreamCallCount.Load(); got != 1 {
 		t.Errorf("upstream called %d times, want exactly 1", got)
+	}
+
+	if got := testutil.ToFloat64(m.UpstreamFetchesTotal.WithLabelValues("npm", "ok")); got != 1 {
+		t.Errorf("upstream_fetches_total{npm,ok} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.UpstreamFetchesTotal.WithLabelValues("npm", "error")); got != 0 {
+		t.Errorf("upstream_fetches_total{npm,error} = %v, want 0", got)
 	}
 
 	for i, r := range results {
@@ -584,7 +595,7 @@ func TestRecordEvent_CacheHit(t *testing.T) {
 		onRecordEvent: func() { close(goroutineDone) },
 	}
 
-	p := newProxy(t, cache, store, database)
+	p, _ := newProxy(t, cache, store, database)
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
 	w := httptest.NewRecorder()
@@ -627,7 +638,7 @@ func TestRecordEvent_UpstreamMiss(t *testing.T) {
 
 	store := &mockStorage{}
 
-	p := newProxy(t, cache, store, database)
+	p, _ := newProxy(t, cache, store, database)
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -685,7 +696,7 @@ func TestRecordEvent_DBError_WarnsAndResponseUnaffected(t *testing.T) {
 	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
 
 	router := NewRouter([]string{"npm"})
-	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database}, &mockSecurityChecker{})
+	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database}, &mockSecurityChecker{}, metrics.New(prometheus.NewRegistry(), []string{}))
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
 	w := httptest.NewRecorder()
@@ -765,7 +776,7 @@ func TestHandleHealth(t *testing.T) {
 			}
 			store := &mockStorage{}
 			database := &mockDB{}
-			p := newProxy(t, cache, store, database)
+			p, _ := newProxy(t, cache, store, database)
 
 			req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 			w := httptest.NewRecorder()
@@ -826,7 +837,7 @@ func TestServeHTTP_CVEScanningDisabled_PackagePassesThrough(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	p := New(router, store, logger, cache, database, checker)
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -897,7 +908,7 @@ func TestServeHTTP_CVEScanningEnabled_WarnPolicy_PackagePassesThrough(t *testing
 	baseHandler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
 	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
 
-	p := New(router, store, logger, cache, database, checker)
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -968,7 +979,7 @@ func TestServeHTTP_CVEScanningEnabled_BlockPolicy_RequestRejected(t *testing.T) 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	upstreamCalled := false
-	p := New(router, store, logger, cache, database, checker)
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamCalled = true
 		return &http.Response{
@@ -1032,7 +1043,7 @@ func TestRecordCVEAlert_InsertedAfterVulnerableScan(t *testing.T) {
 	router := NewRouter([]string{"npm"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	p := New(router, store, logger, cache, database, checker)
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -1104,7 +1115,7 @@ func TestServeHTTP_OSVRequestFailed_WarnsAndPackageServed(t *testing.T) {
 	baseHandler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
 	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
 
-	p := New(router, store, logger, cache, database, checker)
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,

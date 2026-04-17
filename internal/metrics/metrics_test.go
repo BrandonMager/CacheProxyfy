@@ -14,7 +14,7 @@ import (
 func newTestServer(t *testing.T) (*metrics.Metrics, *httptest.Server) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
-	m := metrics.New(reg)
+	m := metrics.New(reg, []string{})
 	srv := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	t.Cleanup(srv.Close)
 	return m, srv

@@ -53,9 +53,11 @@ var proxyDurationBuckets = []float64{
 var sizeBuckets = prometheus.ExponentialBuckets(1024, 4, 10)
 
 // New registers all metrics against reg and returns the populated Metrics struct.
+// ecosystems is used to pre-initialise every labeled series at zero so all
+// metric families appear in /metrics immediately, before any traffic arrives.
 // Use prometheus.NewRegistry() for an isolated registry (recommended in production
 // to avoid polluting the default global registry).
-func New(reg prometheus.Registerer) *Metrics {
+func New(reg prometheus.Registerer, ecosystems []string) *Metrics {
 	m := &Metrics{
 		RequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "cacheproxyfy_requests_total",
@@ -111,6 +113,24 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.CVEScansTotal,
 		m.InflightRequests,
 	)
+
+	for _, eco := range ecosystems {
+		for _, result := range []string{"hit", "miss", "error"} {
+			m.RequestsTotal.With(prometheus.Labels{"ecosystem": eco, "result": result})
+			m.RequestDuration.With(prometheus.Labels{"ecosystem": eco, "result": result})
+		}
+		for _, result := range []string{"hit", "miss"} {
+			m.BytesServedTotal.With(prometheus.Labels{"ecosystem": eco, "result": result})
+		}
+		m.PackageSizeBytes.With(prometheus.Labels{"ecosystem": eco})
+		for _, status := range []string{"ok", "error"} {
+			m.UpstreamFetchesTotal.With(prometheus.Labels{"ecosystem": eco, "status": status})
+		}
+		m.UpstreamFetchDuration.With(prometheus.Labels{"ecosystem": eco})
+		for _, outcome := range []string{"allow", "warn", "block", "error"} {
+			m.CVEScansTotal.With(prometheus.Labels{"ecosystem": eco, "outcome": outcome})
+		}
+	}
 
 	return m
 }
