@@ -160,6 +160,59 @@ func (db *DB) RecordCVEAlert(ctx context.Context, ecosystem, name, version, cveI
 	return nil
 }
 
+type CVEAlert struct {
+	ID         int64     `json:"id"`
+	Ecosystem  string    `json:"ecosystem"`
+	Name       string    `json:"name"`
+	Version    string    `json:"version"`
+	CVEID      string    `json:"cve_id"`
+	Severity   string    `json:"severity"`
+	Outcome    string    `json:"outcome"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// ListCVEAlerts returns CVE alerts since the given time.
+// If ecosystem is non-empty, results are filtered to that ecosystem.
+func (db *DB) ListCVEAlerts(ctx context.Context, since time.Time, ecosystem string) ([]CVEAlert, error) {
+	const qAll = `
+		SELECT id, ecosystem, name, version, cve_id, severity, outcome, recorded_at
+		FROM cve_alerts
+		WHERE recorded_at >= $1
+		ORDER BY recorded_at DESC
+	`
+	const qEco = `
+		SELECT id, ecosystem, name, version, cve_id, severity, outcome, recorded_at
+		FROM cve_alerts
+		WHERE recorded_at >= $1 AND ecosystem = $2
+		ORDER BY recorded_at DESC
+	`
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if ecosystem == "" {
+		rows, err = db.QueryContext(ctx, qAll, since)
+	} else {
+		rows, err = db.QueryContext(ctx, qEco, since, ecosystem)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: list cve alerts: %w", err)
+	}
+	defer rows.Close()
+
+	var alerts []CVEAlert
+	for rows.Next() {
+		var a CVEAlert
+		if err := rows.Scan(&a.ID, &a.Ecosystem, &a.Name, &a.Version, &a.CVEID, &a.Severity, &a.Outcome, &a.RecordedAt); err != nil {
+			return nil, fmt.Errorf("db: list cve alerts scan: %w", err)
+		}
+		alerts = append(alerts, a)
+	}
+
+	return alerts, rows.Err()
+}
+
 type Stats struct {
 	TotalPackages int64
 	TotalHits int64
