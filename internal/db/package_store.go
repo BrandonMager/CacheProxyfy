@@ -11,14 +11,14 @@ import (
 var ErrNotFound = errors.New("db: not found")
 
 type Package struct {
-	ID int64
-	Ecosystem string
-	Name string
-	Version string
-	Checksum string
-	SizeBytes int64
-	CachedAt time.Time
-	LastHitAt *time.Time // or nil if never hit
+	ID        int64      `json:"id"`
+	Ecosystem string     `json:"ecosystem"`
+	Name      string     `json:"name"`
+	Version   string     `json:"version"`
+	Checksum  string     `json:"checksum"`
+	SizeBytes int64      `json:"size_bytes"`
+	CachedAt  time.Time  `json:"cached_at"`
+	LastHitAt *time.Time `json:"last_hit_at"`
 }
 
 /* Inserts new package row or updates checksum and size 
@@ -264,11 +264,11 @@ func (db *DB) ListCVEAlerts(ctx context.Context, since time.Time, ecosystem stri
 }
 
 type Stats struct {
-	TotalPackages int64
-	TotalHits int64
-	TotalMisses int64
-	BytesSaved int64
-	HitRate float64
+	TotalPackages int64   `json:"total_packages"`
+	TotalHits     int64   `json:"total_hits"`
+	TotalMisses   int64   `json:"total_misses"`
+	BytesSaved    int64   `json:"bytes_saved"`
+	HitRate       float64 `json:"hit_rate"`
 }
 
 func (db *DB) GetStats(ctx context.Context, since time.Time) (Stats, error) {
