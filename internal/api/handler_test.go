@@ -37,6 +37,10 @@ func (s *stubDB) ListVersions(_ context.Context, _, _ string) ([]db.Package, err
 	return s.pkgs, s.err
 }
 
+func (s *stubDB) ListPackages(_ context.Context, _ string) ([]db.Package, error) {
+	return s.pkgs, s.err
+}
+
 func (s *stubDB) ListCVEAlerts(_ context.Context, since time.Time, _ string) ([]db.CVEAlert, error) {
 	s.capturedSince = since
 	return s.alerts, s.err
@@ -210,6 +214,79 @@ func TestHandlePackages_DBError(t *testing.T) {
 	stub := &stubDB{err: errors.New("connection reset")}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/packages?ecosystem=npm&name=react", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── /api/packages/list ────────────────────────────────────────────────────────
+
+func TestHandlePackageList_AllEcosystems(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	stub := &stubDB{
+		pkgs: []db.Package{
+			{ID: 1, Ecosystem: "npm", Name: "lodash", Version: "4.17.21", SizeBytes: 256, CachedAt: now},
+			{ID: 2, Ecosystem: "pypi", Name: "requests", Version: "2.31.0", SizeBytes: 128, CachedAt: now},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/list", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var got []db.Package
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Len(t, got, 2)
+}
+
+func TestHandlePackageList_FilteredByEcosystem(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	stub := &stubDB{
+		pkgs: []db.Package{
+			{ID: 1, Ecosystem: "npm", Name: "lodash", Version: "4.17.21", SizeBytes: 256, CachedAt: now},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/list?ecosystem=npm", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []db.Package
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Len(t, got, 1)
+	assert.Equal(t, "npm", got[0].Ecosystem)
+}
+
+func TestHandlePackageList_Empty(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/list", nil)
+	w := httptest.NewRecorder()
+	newMux(&stubDB{}).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []db.Package
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Empty(t, got)
+}
+
+func TestHandlePackageList_MethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/packages/list", nil)
+	w := httptest.NewRecorder()
+	newMux(&stubDB{}).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestHandlePackageList_DBError(t *testing.T) {
+	stub := &stubDB{err: errors.New("connection reset")}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/list", nil)
 	w := httptest.NewRecorder()
 	newMux(stub).ServeHTTP(w, req)
 

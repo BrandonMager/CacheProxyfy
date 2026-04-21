@@ -16,6 +16,7 @@ type DBClient interface {
 	GetStats(ctx context.Context, since time.Time) (db.Stats, error)
 	GetPackage(ctx context.Context, ecosystem, name, version string) (db.Package, error)
 	ListVersions(ctx context.Context, ecosystem, name string) ([]db.Package, error)
+	ListPackages(ctx context.Context, ecosystem string) ([]db.Package, error)
 	ListCVEAlerts(ctx context.Context, since time.Time, ecosystem string) ([]db.CVEAlert, error)
 }
 
@@ -32,6 +33,7 @@ func NewHandler(db DBClient) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stats", h.handleStats)
 	mux.HandleFunc("/api/packages", h.handlePackages)
+	mux.HandleFunc("/api/packages/list", h.handlePackageList)
 	mux.HandleFunc("/api/cve-alerts", h.handleCVEAlerts)
 }
 
@@ -95,6 +97,29 @@ func (h *Handler) handlePackages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pkgs, err := h.db.ListVersions(r.Context(), ecosystem, name)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if pkgs == nil {
+		pkgs = []db.Package{}
+	}
+	writeJSON(w, pkgs)
+}
+
+// handlePackageList handles GET /api/packages/list[?ecosystem=<eco>]
+//
+// Returns all cached packages, optionally filtered by ecosystem.
+// No required params — omitting ecosystem returns packages across all ecosystems.
+func (h *Handler) handlePackageList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ecosystem := r.URL.Query().Get("ecosystem")
+
+	pkgs, err := h.db.ListPackages(r.Context(), ecosystem)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
