@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BrandonMager/CacheProxyfy/internal/api"
 	"github.com/BrandonMager/CacheProxyfy/internal/cache"
 	"github.com/BrandonMager/CacheProxyfy/internal/config"
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
@@ -95,12 +96,13 @@ func run(logger *slog.Logger) error {
 	router := proxy.NewRouter(cfg.Proxy.Ecosystems)
 	p := proxy.New(router, store, logger, redisClient, database, checker, m)
 
-	// Separate mux: proxy traffic on the main port, /metrics on a dedicated
-	// internal port (9090) so it is never accidentally exposed publicly.
+	// Separate mux: proxy traffic on the main port, /metrics and /api/* on a
+	// dedicated internal port (9090) so they are never accidentally exposed publicly.
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{
 		EnableOpenMetrics: true, // Enables OpenMetrics text format (superset of Prometheus format)
 	}))
+	api.NewHandler(database).RegisterRoutes(metricsMux)
 
 	metricsSrv := &http.Server{
 		Addr:         "127.0.0.1:9090",
