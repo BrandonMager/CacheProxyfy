@@ -132,6 +132,56 @@ func (db *DB) ListVersions(ctx context.Context, ecosystem, name string) ([]Packa
 	return pkgs, rows.Err()
 }
 
+// ListPackages returns all cached packages ordered by most recently cached.
+// If ecosystem is non-empty, results are filtered to that ecosystem.
+func (db *DB) ListPackages(ctx context.Context, ecosystem string) ([]Package, error) {
+	const qAll = `
+		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
+		FROM packages
+		ORDER BY cached_at DESC
+	`
+	const qEco = `
+		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
+		FROM packages
+		WHERE ecosystem = $1
+		ORDER BY cached_at DESC
+	`
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if ecosystem == "" {
+		rows, err = db.QueryContext(ctx, qAll)
+	} else {
+		rows, err = db.QueryContext(ctx, qEco, ecosystem)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: list packages: %w", err)
+	}
+	defer rows.Close()
+
+	var pkgs []Package
+	for rows.Next() {
+		var pkg Package
+		if err := rows.Scan(
+			&pkg.ID,
+			&pkg.Ecosystem,
+			&pkg.Name,
+			&pkg.Version,
+			&pkg.Checksum,
+			&pkg.SizeBytes,
+			&pkg.CachedAt,
+			&pkg.LastHitAt,
+		); err != nil {
+			return nil, fmt.Errorf("db: list packages scan: %w", err)
+		}
+		pkgs = append(pkgs, pkg)
+	}
+
+	return pkgs, rows.Err()
+}
+
 func (db *DB) RecordEvent(ctx context.Context, ecosystem, name, version, event string, bytes int64) error {
 	const q = `
 		INSERT INTO cache_events (ecosystem, name, version, event, bytes)
