@@ -61,6 +61,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if mh, ok := handler.(ecosystem.MetadataHandler); ok && mh.IsMetadataRequest(r) {
+		p.handleMetadata(w, r, mh)
+		return
+	}
+
 	pkg, err := handler.Parse(r)
 	if err == ecosystem.ErrNotPackageRequest {
 		http.NotFound(w, r)
@@ -258,6 +263,45 @@ func (p *Proxy) recordCVEAlerts(pkg *ecosystem.Package, outcome security.Outcome
 			p.logger.Warn("record cve alert failed", "package", pkg.Name, "cve", r.ID, "error", err)
 		}
 	}
+}
+
+func (p *Proxy) handleMetadata(w http.ResponseWriter, r *http.Request, mh ecosystem.MetadataHandler) {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	proxyBase := scheme + "://" + r.Host
+
+	upstreamURL := mh.MetadataUpstreamURL(r)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		return
+	}
+	req.Header.Set("User-Agent", "CacheProxyfy/0.1")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		http.Error(w, "upstream fetch failed", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "reading upstream response failed", http.StatusBadGateway)
+		return
+	}
+
+	rewritten, err := mh.RewriteMetadata(body, proxyBase)
+	if err != nil {
+		http.Error(w, "rewriting metadata failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	w.Write(rewritten) //nolint:errcheck
 }
 
 func (p *Proxy) handleHealth(w http.ResponseWriter, _ *http.Request) {

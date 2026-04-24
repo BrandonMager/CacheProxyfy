@@ -1161,3 +1161,38 @@ func TestServeHTTP_OSVRequestFailed_WarnsAndPackageServed(t *testing.T) {
 		t.Fatal("write-back goroutine did not complete within 1s")
 	}
 }
+
+func TestServeHTTP_PyPISimpleIndex(t *testing.T) {
+	const proxyBase = "http://example.com"
+	upstreamHTML := `<a href="https://files.pythonhosted.org/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl#sha256=abc">requests-2.31.0</a>`
+	wantHTML := `<a href="` + proxyBase + `/pypi/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl#sha256=abc">requests-2.31.0</a>`
+
+	router := NewRouter([]string{"pypi"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := metrics.New(prometheus.NewRegistry(), []string{})
+	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m)
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://pypi.org/simple/requests/" {
+			t.Errorf("unexpected upstream URL: %s", r.URL)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/html"}},
+			Body:       io.NopCloser(strings.NewReader(upstreamHTML)),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/pypi/simple/requests/", nil)
+	req.Host = "example.com"
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != wantHTML {
+		t.Errorf("body mismatch:\ngot:  %s\nwant: %s", body, wantHTML)
+	}
+}

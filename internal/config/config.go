@@ -84,6 +84,7 @@ func Load() (*Config, error) {
 
 	v.SetDefault("database.host", "localhost")
 	v.SetDefault("database.port", 5432)
+	//v.SetDefault("database.dbname", "cacheproxyfy")
 	v.SetDefault("database.sslmode", "disable")
 
 	v.SetDefault("security.cve_scanning", false)

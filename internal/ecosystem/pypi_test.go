@@ -36,6 +36,13 @@ func TestPyPIParse(t *testing.T) {
 			wantVersion: "3.0.0",
 			wantFile:    "some_package-3.0.0.zip",
 		},
+		{
+			name:        "real pythonhosted hash path",
+			path:        "/pypi/packages/5f/a4/98b9c7c6428a668bf7e42ebb7c79d576a1c3c1e3ae2d47e674b468388871/requests-2.33.1.tar.gz",
+			wantName:    "requests",
+			wantVersion: "2.33.1",
+			wantFile:    "requests-2.33.1.tar.gz",
+		},
 	}
 
 	p := NewPyPI()
@@ -114,24 +121,24 @@ func TestPyPIParseErrors(t *testing.T) {
 
 func TestPyPIUpstreamURL(t *testing.T) {
 	tests := []struct {
-		name     string
-		filename string
-		want     string
+		name         string
+		upstreamPath string
+		want         string
 	}{
 		{
-			name:     "wheel file",
-			filename: "requests-2.28.0-py3-none-any.whl",
-			want:     "https://files.pythonhosted.org/packages/requests-2.28.0-py3-none-any.whl",
+			name:         "wheel file",
+			upstreamPath: "ab/cd/requests/requests-2.28.0-py3-none-any.whl",
+			want:         "https://files.pythonhosted.org/packages/ab/cd/requests/requests-2.28.0-py3-none-any.whl",
 		},
 		{
-			name:     "sdist tar.gz",
-			filename: "numpy-1.24.0.tar.gz",
-			want:     "https://files.pythonhosted.org/packages/numpy-1.24.0.tar.gz",
+			name:         "sdist tar.gz",
+			upstreamPath: "ab/cd/numpy/numpy-1.24.0.tar.gz",
+			want:         "https://files.pythonhosted.org/packages/ab/cd/numpy/numpy-1.24.0.tar.gz",
 		},
 		{
-			name:     "zip file",
-			filename: "some_package-3.0.0.zip",
-			want:     "https://files.pythonhosted.org/packages/some_package-3.0.0.zip",
+			name:         "zip file",
+			upstreamPath: "ab/cd/some-package/some_package-3.0.0.zip",
+			want:         "https://files.pythonhosted.org/packages/ab/cd/some-package/some_package-3.0.0.zip",
 		},
 	}
 
@@ -139,7 +146,7 @@ func TestPyPIUpstreamURL(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			pkg := &Package{Filename: tc.filename}
+			pkg := &Package{UpstreamPath: tc.upstreamPath}
 			got := p.UpstreamURL(pkg)
 			if got != tc.want {
 				t.Errorf("expected %q, got %q", tc.want, got)
@@ -157,6 +164,56 @@ func TestPyPIRewriteResponse(t *testing.T) {
 	}
 	if string(got) != string(body) {
 		t.Errorf("expected body to be unchanged, got %q", got)
+	}
+}
+
+func TestPyPIIsMetadataRequest(t *testing.T) {
+	p := NewPyPI()
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/pypi/simple/requests/", true},
+		{"/pypi/simple/numpy/", true},
+		{"/pypi/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl", false},
+		{"/npm/lodash/-/lodash-4.17.21.tgz", false},
+	}
+	for _, tc := range tests {
+		r, _ := http.NewRequest(http.MethodGet, tc.path, nil)
+		if got := p.IsMetadataRequest(r); got != tc.want {
+			t.Errorf("IsMetadataRequest(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestPyPIMetadataUpstreamURL(t *testing.T) {
+	p := NewPyPI()
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/pypi/simple/requests/", "https://pypi.org/simple/requests/"},
+		{"/pypi/simple/numpy/", "https://pypi.org/simple/numpy/"},
+	}
+	for _, tc := range tests {
+		r, _ := http.NewRequest(http.MethodGet, tc.path, nil)
+		if got := p.MetadataUpstreamURL(r); got != tc.want {
+			t.Errorf("MetadataUpstreamURL(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestPyPIRewriteMetadata(t *testing.T) {
+	p := NewPyPI()
+	input := `<a href="https://files.pythonhosted.org/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl#sha256=abc">requests-2.31.0</a>`
+	want := `<a href="http://localhost:8080/pypi/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl#sha256=abc">requests-2.31.0</a>`
+
+	got, err := p.RewriteMetadata([]byte(input), "http://localhost:8080")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != want {
+		t.Errorf("RewriteMetadata mismatch:\ngot:  %s\nwant: %s", got, want)
 	}
 }
 
