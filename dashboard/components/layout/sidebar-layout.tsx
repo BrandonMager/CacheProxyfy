@@ -1,6 +1,7 @@
 "use client"
 import React, { useState, useEffect } from "react";
 import { useTheme } from "next-themes";
+import { usePathname } from "next/navigation";
 import {
   Home,
   Package,
@@ -48,7 +49,7 @@ export const SidebarLayout = ({ children, title, subtitle }: {
 
 const Sidebar = () => {
   const [open, setOpen] = useState(true);
-  const [selected, setSelected] = useState("Overview");
+  const pathname = usePathname();
 
   return (
     <nav
@@ -59,10 +60,10 @@ const Sidebar = () => {
       <TitleSection open={open} />
 
       <div className="space-y-1 mb-8">
-        <Option Icon={Home}        title="Overview"   selected={selected} setSelected={setSelected} open={open} href="/" />
-        <Option Icon={Package}     title="Packages"   selected={selected} setSelected={setSelected} open={open} href="/packages" />
-        <Option Icon={ShieldAlert} title="Security"   selected={selected} setSelected={setSelected} open={open} href="/security" />
-        <Option Icon={BarChart3}   title="Metrics"    selected={selected} setSelected={setSelected} open={open} href="/metrics" />
+        <Option Icon={Home}        title="Overview"   pathname={pathname} open={open} href="/" />
+        <Option Icon={Package}     title="Packages"   pathname={pathname} open={open} href="/packages" />
+        <Option Icon={ShieldAlert} title="Security"   pathname={pathname} open={open} href="/security" />
+        <Option Icon={BarChart3}   title="Metrics"    pathname={pathname} open={open} href="/metrics" />
       </div>
 
       {open && (
@@ -70,8 +71,8 @@ const Sidebar = () => {
           <div className="px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
             System
           </div>
-          <Option Icon={Settings}   title="Settings"    selected={selected} setSelected={setSelected} open={open} href="/settings" />
-          <Option Icon={HelpCircle} title="Help & Docs" selected={selected} setSelected={setSelected} open={open} href="/help" />
+          <Option Icon={Settings}   title="Settings"    pathname={pathname} open={open} href="/settings" />
+          <Option Icon={HelpCircle} title="Help & Docs" pathname={pathname} open={open} href="/help" />
         </div>
       )}
 
@@ -80,20 +81,18 @@ const Sidebar = () => {
   );
 };
 
-const Option = ({ Icon, title, selected, setSelected, open, href }: {
+const Option = ({ Icon, title, pathname, open, href }: {
   Icon: React.ElementType;
   title: string;
-  selected: string;
-  setSelected: (s: string) => void;
+  pathname: string;
   open: boolean;
   href: string;
 }) => {
-  const isSelected = selected === title;
+  const isSelected = href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
     <a
       href={href}
-      onClick={() => setSelected(title)}
       className={`relative flex h-11 w-full items-center rounded-md transition-all duration-200 ${
         isSelected
           ? "bg-blue-50 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 shadow-sm border-l-2 border-blue-500"
