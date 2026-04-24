@@ -11,7 +11,9 @@ type Router struct {
 
 func NewRouter(enabledEcosystems[] string) *Router {
 	all := map[string]ecosystem.Handler{
-		"npm": ecosystem.NewNPM(),
+		"npm":   ecosystem.NewNPM(),
+		"pypi":  ecosystem.NewPyPI(),
+		"maven": ecosystem.NewMaven(),
 	}
 
 	enabled := make(map[string]bool, len(enabledEcosystems))
