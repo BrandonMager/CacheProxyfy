@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
 import { SidebarLayout } from "@/components/layout/sidebar-layout";
 import { StatsGrid } from "@/components/metrics/stats-grid";
 import { HitRateBar } from "@/components/metrics/hit-rate-bar";
@@ -19,7 +20,8 @@ export default async function MetricsPage({
   searchParams: Promise<{ since?: string }>;
 }) {
   const { since: raw } = await searchParams;
-  const since: Since = VALID_SINCE.has(raw ?? "") ? (raw as Since) : "24h";
+  if (raw !== undefined && !VALID_SINCE.has(raw)) redirect("/metrics?since=24h");
+  const since: Since = (raw as Since) ?? "24h";
 
   const stats = await getStats(since).catch(() => null);
 
