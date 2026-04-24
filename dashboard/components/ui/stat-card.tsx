@@ -1,4 +1,3 @@
-"use client"
 import { Activity } from "lucide-react";
 
 type Color = "blue" | "green" | "purple" | "orange" | "red";
