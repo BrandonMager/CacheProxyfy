@@ -1,5 +1,6 @@
 cacheproxyfy
 dist/ 
+.claude/
 
 coverage.out
 *.test
