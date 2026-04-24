@@ -30,25 +30,49 @@ func (p *PyPI) Parse(r *http.Request) (*Package, error){
 		return nil, ErrNotPackageRequest
 	}
 
-	name := normalise(m[1])
+	name := normalise(m[3])
 	filename := m[2]
 	version := m[4]
+	upstreamPath := strings.TrimPrefix(r.URL.Path, "/pypi/packages/")
 
 	return &Package{
-		Ecosystem: "pypi",
-		Name: name,
-		Version: version,
-		Filename: filename,
+		Ecosystem:    "pypi",
+		Name:         name,
+		Version:      version,
+		Filename:     filename,
+		UpstreamPath: upstreamPath,
 	}, nil
 }
 
 
 func (p *PyPI) UpstreamURL(pkg *Package) string {
-	return fmt.Sprintf("%s/packages/%s", p.UpstreamBase, pkg.Filename)
+	return fmt.Sprintf("%s/packages/%s", p.UpstreamBase, pkg.UpstreamPath)
 }
 
-func (p *PyPI) RewriteResponse(_ context.Context, body []byte, _ *Package) ([]byte, error){
+func (p *PyPI) RewriteResponse(_ context.Context, body []byte, _ *Package) ([]byte, error) {
 	return body, nil
+}
+
+// IsMetadataRequest reports whether r is a PyPI simple index request.
+func (p *PyPI) IsMetadataRequest(r *http.Request) bool {
+	return strings.HasPrefix(r.URL.Path, "/pypi/simple/")
+}
+
+// MetadataUpstreamURL returns the PyPI simple index URL for the request.
+func (p *PyPI) MetadataUpstreamURL(r *http.Request) string {
+	path := strings.TrimPrefix(r.URL.Path, "/pypi")
+	return "https://pypi.org" + path
+}
+
+// RewriteMetadata replaces pythonhosted.org download URLs with proxy URLs
+// so pip fetches artifacts through the proxy instead of directly.
+func (p *PyPI) RewriteMetadata(body []byte, proxyBase string) ([]byte, error) {
+	rewritten := strings.ReplaceAll(
+		string(body),
+		"https://files.pythonhosted.org",
+		proxyBase+"/pypi",
+	)
+	return []byte(rewritten), nil
 }
 
 func normalise(name string) string {
