@@ -102,7 +102,7 @@ func run(logger *slog.Logger) error {
 	metricsMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{
 		EnableOpenMetrics: true, // Enables OpenMetrics text format (superset of Prometheus format)
 	}))
-	api.NewHandler(database).RegisterRoutes(metricsMux)
+	api.NewHandler(database, cfg).RegisterRoutes(metricsMux)
 
 	metricsSrv := &http.Server{
 		Addr:         "127.0.0.1:9090",
