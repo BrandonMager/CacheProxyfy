@@ -1,4 +1,4 @@
-import type { CVEAlert, Package, Stats } from "@/types/api";
+import type { CVEAlert, ConfigResponse, Package, Stats } from "@/types/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:9090";
 
@@ -42,6 +42,11 @@ export function listVersions(
 ): Promise<Package[]> {
   const params = new URLSearchParams({ ecosystem, name });
   return apiFetch<Package[]>(`/api/packages?${params}`);
+}
+
+// GET /api/config
+export function getConfig(): Promise<ConfigResponse> {
+  return apiFetch<ConfigResponse>("/api/config");
 }
 
 // GET /api/cve-alerts?since=<duration>[&ecosystem=<eco>]
