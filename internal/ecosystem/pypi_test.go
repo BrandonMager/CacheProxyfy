@@ -186,6 +186,25 @@ func TestPyPIIsMetadataRequest(t *testing.T) {
 	}
 }
 
+func TestPyPIIsMetadataRequestWhlMetadata(t *testing.T) {
+	p := NewPyPI()
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/pypi/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl.metadata", true},
+		{"/pypi/packages/ab/cd/numpy/numpy-1.24.0-cp311-cp311-manylinux_2_17_x86_64.whl.metadata", true},
+		{"/pypi/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl", false},
+		{"/pypi/simple/requests/", true},
+	}
+	for _, tc := range tests {
+		r, _ := http.NewRequest(http.MethodGet, tc.path, nil)
+		if got := p.IsMetadataRequest(r); got != tc.want {
+			t.Errorf("IsMetadataRequest(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestPyPIMetadataUpstreamURL(t *testing.T) {
 	p := NewPyPI()
 	tests := []struct {
@@ -194,6 +213,29 @@ func TestPyPIMetadataUpstreamURL(t *testing.T) {
 	}{
 		{"/pypi/simple/requests/", "https://pypi.org/simple/requests/"},
 		{"/pypi/simple/numpy/", "https://pypi.org/simple/numpy/"},
+	}
+	for _, tc := range tests {
+		r, _ := http.NewRequest(http.MethodGet, tc.path, nil)
+		if got := p.MetadataUpstreamURL(r); got != tc.want {
+			t.Errorf("MetadataUpstreamURL(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestPyPIMetadataUpstreamURLWhlMetadata(t *testing.T) {
+	p := NewPyPI()
+	tests := []struct {
+		path string
+		want string
+	}{
+		{
+			path: "/pypi/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl.metadata",
+			want: "https://files.pythonhosted.org/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl.metadata",
+		},
+		{
+			path: "/pypi/packages/ab/cd/numpy/numpy-1.24.0-cp311-cp311-manylinux_2_17_x86_64.whl.metadata",
+			want: "https://files.pythonhosted.org/packages/ab/cd/numpy/numpy-1.24.0-cp311-cp311-manylinux_2_17_x86_64.whl.metadata",
+		},
 	}
 	for _, tc := range tests {
 		r, _ := http.NewRequest(http.MethodGet, tc.path, nil)
