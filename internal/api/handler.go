@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/BrandonMager/CacheProxyfy/internal/config"
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
 )
 
@@ -21,11 +22,12 @@ type DBClient interface {
 }
 
 type Handler struct {
-	db DBClient
+	db  DBClient
+	cfg *config.Config
 }
 
-func NewHandler(db DBClient) *Handler {
-	return &Handler{db: db}
+func NewHandler(db DBClient, cfg *config.Config) *Handler {
+	return &Handler{db: db, cfg: cfg}
 }
 
 // RegisterRoutes mounts all API endpoints onto the provided mux.
@@ -35,6 +37,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/packages", h.handlePackages)
 	mux.HandleFunc("/api/packages/list", h.handlePackageList)
 	mux.HandleFunc("/api/cve-alerts", h.handleCVEAlerts)
+	mux.HandleFunc("/api/config", h.handleConfig)
 }
 
 // handleStats handles GET /api/stats?since=<duration>
@@ -164,6 +167,108 @@ func parseSince(s string) time.Time {
 		}
 	}
 	return time.Now().Add(-24 * time.Hour)
+}
+
+// handleConfig handles GET /api/config
+// Returns the active configuration with all secrets omitted.
+func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.cfg == nil {
+		http.Error(w, "config unavailable", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, configResponse{
+		Proxy: proxyConfigResponse{
+			Port:       h.cfg.Proxy.Port,
+			Ecosystems: h.cfg.Proxy.Ecosystems,
+		},
+		Cache: cacheConfigResponse{
+			Backend:  h.cfg.Cache.Backend,
+			LocalDir: h.cfg.Cache.LocalDir,
+			TTLHours: h.cfg.Cache.TTLHours,
+		},
+		S3: s3ConfigResponse{
+			Bucket:    h.cfg.S3.Bucket,
+			Region:    h.cfg.S3.Region,
+			Endpoint:  h.cfg.S3.Endpoint,
+			KeyPrefix: h.cfg.S3.KeyPrefix,
+		},
+		Redis: redisConfigResponse{
+			Addr: h.cfg.Redis.Addr,
+			DB:   h.cfg.Redis.DB,
+		},
+		Database: databaseConfigResponse{
+			Host:    h.cfg.Database.Host,
+			Port:    h.cfg.Database.Port,
+			User:    h.cfg.Database.User,
+			DBName:  h.cfg.Database.DBName,
+			SSLMode: h.cfg.Database.SSLMode,
+		},
+		Security: securityConfigResponse{
+			CVEScanning:   h.cfg.Security.CVEScanning,
+			BlockSeverity: h.cfg.Security.BlockSeverity,
+			WarnSeverity:  h.cfg.Security.WarnSeverity,
+		},
+		Log: logConfigResponse{
+			Level:  h.cfg.Log.Level,
+			Format: h.cfg.Log.Format,
+		},
+	})
+}
+
+type configResponse struct {
+	Proxy    proxyConfigResponse    `json:"proxy"`
+	Cache    cacheConfigResponse    `json:"cache"`
+	S3       s3ConfigResponse       `json:"s3"`
+	Redis    redisConfigResponse    `json:"redis"`
+	Database databaseConfigResponse `json:"database"`
+	Security securityConfigResponse `json:"security"`
+	Log      logConfigResponse      `json:"log"`
+}
+
+type proxyConfigResponse struct {
+	Port       int      `json:"port"`
+	Ecosystems []string `json:"ecosystems"`
+}
+
+type cacheConfigResponse struct {
+	Backend  string `json:"backend"`
+	LocalDir string `json:"local_dir"`
+	TTLHours int    `json:"ttl_hours"`
+}
+
+type s3ConfigResponse struct {
+	Bucket    string `json:"bucket"`
+	Region    string `json:"region"`
+	Endpoint  string `json:"endpoint"`
+	KeyPrefix string `json:"key_prefix"`
+}
+
+type redisConfigResponse struct {
+	Addr string `json:"addr"`
+	DB   int    `json:"db"`
+}
+
+type databaseConfigResponse struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	User    string `json:"user"`
+	DBName  string `json:"dbname"`
+	SSLMode string `json:"sslmode"`
+}
+
+type securityConfigResponse struct {
+	CVEScanning   bool   `json:"cve_scanning"`
+	BlockSeverity string `json:"block_severity"`
+	WarnSeverity  string `json:"warn_severity"`
+}
+
+type logConfigResponse struct {
+	Level  string `json:"level"`
+	Format string `json:"format"`
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
