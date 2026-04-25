@@ -53,14 +53,20 @@ func (p *PyPI) RewriteResponse(_ context.Context, body []byte, _ *Package) ([]by
 	return body, nil
 }
 
-// IsMetadataRequest reports whether r is a PyPI simple index request.
+// IsMetadataRequest reports whether r is a PyPI simple index or wheel metadata request.
 func (p *PyPI) IsMetadataRequest(r *http.Request) bool {
-	return strings.HasPrefix(r.URL.Path, "/pypi/simple/")
+	return strings.HasPrefix(r.URL.Path, "/pypi/simple/") ||
+		strings.HasSuffix(r.URL.Path, ".whl.metadata")
 }
 
-// MetadataUpstreamURL returns the PyPI simple index URL for the request.
+// MetadataUpstreamURL returns the upstream URL for simple index and wheel metadata requests.
+// Simple index requests are proxied to pypi.org; wheel metadata files are proxied to
+// files.pythonhosted.org to match where PyPI actually serves them.
 func (p *PyPI) MetadataUpstreamURL(r *http.Request) string {
 	path := strings.TrimPrefix(r.URL.Path, "/pypi")
+	if strings.HasSuffix(r.URL.Path, ".whl.metadata") {
+		return "https://files.pythonhosted.org" + path
+	}
 	return "https://pypi.org" + path
 }
 
