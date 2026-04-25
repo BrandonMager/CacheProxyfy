@@ -27,3 +27,41 @@ export interface Stats {
   bytes_saved: number;
   hit_rate: number;
 }
+
+export interface ConfigResponse {
+  proxy: {
+    port: number;
+    ecosystems: string[];
+  };
+  cache: {
+    backend: string;
+    local_dir: string;
+    ttl_hours: number;
+  };
+  s3: {
+    bucket: string;
+    region: string;
+    endpoint: string;
+    key_prefix: string;
+  };
+  redis: {
+    addr: string;
+    db: number;
+  };
+  database: {
+    host: string;
+    port: number;
+    user: string;
+    dbname: string;
+    sslmode: string;
+  };
+  security: {
+    cve_scanning: boolean;
+    block_severity: string;
+    warn_severity: string;
+  };
+  log: {
+    level: string;
+    format: string;
+  };
+}
