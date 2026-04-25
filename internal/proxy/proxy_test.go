@@ -1162,6 +1162,85 @@ func TestServeHTTP_OSVRequestFailed_WarnsAndPackageServed(t *testing.T) {
 	}
 }
 
+// TestServeHTTP_PyPIPEP658 verifies the end-to-end flow for packages that use PEP 658
+// wheel metadata. pip first fetches the simple index (which includes a data-dist-info-metadata
+// attribute pointing to a .whl.metadata file), then fetches the .whl.metadata file separately
+// so it can evaluate dependencies without downloading the full wheel.
+//
+// The proxy must:
+//  1. Serve the simple index from pypi.org and rewrite pythonhosted.org URLs to proxy URLs.
+//  2. Recognise a .whl.metadata path as a metadata request.
+//  3. Route the .whl.metadata request to files.pythonhosted.org (not pypi.org).
+//  4. Return the metadata body unchanged to the caller.
+func TestServeHTTP_PyPIPEP658(t *testing.T) {
+	const (
+		proxyBase   = "http://example.com"
+		whlPath     = "/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl"
+		metaPath    = "/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl.metadata"
+		metaContent = "Metadata-Version: 2.1\nName: requests\nVersion: 2.31.0\n"
+	)
+
+	// Step 1: simple index HTML that a PEP 658-aware PyPI returns.
+	// The data-dist-info-metadata attribute signals that wheel metadata is available.
+	upstreamHTML := `<a href="https://files.pythonhosted.org` + whlPath + `#sha256=abc" data-dist-info-metadata="sha256=def">requests-2.31.0</a>`
+	wantHTML := `<a href="` + proxyBase + `/pypi` + whlPath + `#sha256=abc" data-dist-info-metadata="sha256=def">requests-2.31.0</a>`
+
+	router := NewRouter([]string{"pypi"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := metrics.New(prometheus.NewRegistry(), []string{})
+	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m)
+
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.String() {
+		case "https://pypi.org/simple/requests/":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body:       io.NopCloser(strings.NewReader(upstreamHTML)),
+			}, nil
+		case "https://files.pythonhosted.org" + metaPath:
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/octet-stream"}},
+				Body:       io.NopCloser(strings.NewReader(metaContent)),
+			}, nil
+		default:
+			t.Errorf("unexpected upstream URL: %s", r.URL)
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
+	})
+
+	// Step 1 — pip fetches the simple index; proxy should rewrite URLs.
+	req := httptest.NewRequest(http.MethodGet, "/pypi/simple/requests/", nil)
+	req.Host = "example.com"
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("simple index: expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != wantHTML {
+		t.Errorf("simple index body mismatch:\ngot:  %s\nwant: %s", body, wantHTML)
+	}
+
+	// Step 2 — pip fetches the .whl.metadata file; proxy should route to files.pythonhosted.org.
+	req2 := httptest.NewRequest(http.MethodGet, "/pypi"+metaPath, nil)
+	req2.Host = "example.com"
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(w2, req2)
+
+	resp2 := w2.Result()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("whl.metadata: expected 200, got %d", resp2.StatusCode)
+	}
+	body2, _ := io.ReadAll(resp2.Body)
+	if string(body2) != metaContent {
+		t.Errorf("whl.metadata body mismatch:\ngot:  %s\nwant: %s", body2, metaContent)
+	}
+}
+
 func TestServeHTTP_PyPISimpleIndex(t *testing.T) {
 	const proxyBase = "http://example.com"
 	upstreamHTML := `<a href="https://files.pythonhosted.org/packages/ab/cd/requests/requests-2.31.0-py3-none-any.whl#sha256=abc">requests-2.31.0</a>`
