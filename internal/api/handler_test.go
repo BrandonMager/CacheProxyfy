@@ -46,6 +46,10 @@ func (s *stubDB) ListCVEAlerts(_ context.Context, since time.Time, _ string) ([]
 	return s.alerts, s.err
 }
 
+func (s *stubDB) ListPackageCVEAlerts(_ context.Context, _, _, _ string) ([]db.CVEAlert, error) {
+	return s.alerts, s.err
+}
+
 // helpers
 
 func newMux(stub *stubDB) *http.ServeMux {
@@ -416,6 +420,74 @@ func TestHandleCVEAlerts_DBError(t *testing.T) {
 	stub := &stubDB{err: errors.New("timeout")}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cve-alerts", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── /api/packages/cve-alerts ──────────────────────────────────────────────────
+
+func TestHandlePackageCVEAlerts_ReturnsAlerts(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	stub := &stubDB{
+		alerts: []db.CVEAlert{
+			{ID: 1, Ecosystem: "pypi", Name: "requests", Version: "2.28.0", CVEID: "CVE-2023-32681", Severity: "MEDIUM", Outcome: "warn", RecordedAt: now},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/cve-alerts?ecosystem=pypi&name=requests&version=2.28.0", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var got []db.CVEAlert
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	require.Len(t, got, 1)
+	assert.Equal(t, "CVE-2023-32681", got[0].CVEID)
+	assert.Equal(t, "MEDIUM", got[0].Severity)
+}
+
+func TestHandlePackageCVEAlerts_Empty(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/cve-alerts?ecosystem=pypi&name=requests&version=2.31.0", nil)
+	w := httptest.NewRecorder()
+	newMux(&stubDB{}).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []db.CVEAlert
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Empty(t, got)
+}
+
+func TestHandlePackageCVEAlerts_MissingParams(t *testing.T) {
+	cases := []string{
+		"/api/packages/cve-alerts",
+		"/api/packages/cve-alerts?ecosystem=pypi",
+		"/api/packages/cve-alerts?ecosystem=pypi&name=requests",
+	}
+	for _, path := range cases {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		newMux(&stubDB{}).ServeHTTP(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "path: %s", path)
+	}
+}
+
+func TestHandlePackageCVEAlerts_MethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/packages/cve-alerts?ecosystem=pypi&name=requests&version=2.28.0", nil)
+	w := httptest.NewRecorder()
+	newMux(&stubDB{}).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestHandlePackageCVEAlerts_DBError(t *testing.T) {
+	stub := &stubDB{err: errors.New("connection reset")}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/cve-alerts?ecosystem=pypi&name=requests&version=2.28.0", nil)
 	w := httptest.NewRecorder()
 	newMux(stub).ServeHTTP(w, req)
 
