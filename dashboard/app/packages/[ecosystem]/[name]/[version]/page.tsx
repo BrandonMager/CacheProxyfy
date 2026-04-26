@@ -27,7 +27,7 @@ export default async function PackageDetailPage({
       <Breadcrumb
         crumbs={[
           { label: "Packages", href: "/packages" },
-          { label: decodedName, href: `/packages/${ecosystem}/${encodeURIComponent(name)}` },
+          { label: decodedName, href: `/packages/${ecosystem}/${encodeURIComponent(decodedName)}` },
           { label: decodedVersion },
         ]}
       />
