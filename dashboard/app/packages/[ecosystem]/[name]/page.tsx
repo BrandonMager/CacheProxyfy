@@ -1,5 +1,6 @@
 import { SidebarLayout } from "@/components/layout/sidebar-layout";
 import { VersionsTable } from "@/components/packages/versions-table";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { listVersions } from "@/lib/api";
 
 export default async function PackageVersionsPage({
@@ -18,6 +19,12 @@ export default async function PackageVersionsPage({
       title={decodedName}
       subtitle={`${ecosystem} · ${count} cached version${count !== 1 ? "s" : ""}`}
     >
+      <Breadcrumb
+        crumbs={[
+          { label: "Packages", href: "/packages" },
+          { label: decodedName },
+        ]}
+      />
       <VersionsTable packages={versions} />
     </SidebarLayout>
   );

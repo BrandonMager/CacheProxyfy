@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { SidebarLayout } from "@/components/layout/sidebar-layout";
 import { PackageDetail } from "@/components/packages/package-detail";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { getPackage } from "@/lib/api";
 
 export default async function PackageDetailPage({
@@ -23,6 +24,13 @@ export default async function PackageDetailPage({
       title={decodedName}
       subtitle={`${ecosystem} · ${decodedVersion}`}
     >
+      <Breadcrumb
+        crumbs={[
+          { label: "Packages", href: "/packages" },
+          { label: decodedName, href: `/packages/${ecosystem}/${encodeURIComponent(name)}` },
+          { label: decodedVersion },
+        ]}
+      />
       <PackageDetail pkg={pkg} />
     </SidebarLayout>
   );
