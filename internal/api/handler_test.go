@@ -50,7 +50,7 @@ func (s *stubDB) ListCVEAlerts(_ context.Context, since time.Time, _ string) ([]
 
 func newMux(stub *stubDB) *http.ServeMux {
 	mux := http.NewServeMux()
-	NewHandler(stub).RegisterRoutes(mux)
+	NewHandler(stub, nil).RegisterRoutes(mux)
 	return mux
 }
 
@@ -147,6 +147,66 @@ func TestHandlePackages_ListVersions(t *testing.T) {
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
 	assert.Len(t, got, 2)
 	assert.Equal(t, "18.0.0", got[0].Version)
+}
+
+func TestHandlePackages_ListVersions_AllMetadataFields(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	lastHit := now.Add(-time.Hour)
+	stub := &stubDB{
+		pkgs: []db.Package{
+			{
+				ID:        10,
+				Ecosystem: "pypi",
+				Name:      "requests",
+				Version:   "2.31.0",
+				Checksum:  "sha256:abc123",
+				SizeBytes: 131072,
+				CachedAt:  now,
+				LastHitAt: &lastHit,
+			},
+			{
+				ID:        11,
+				Ecosystem: "pypi",
+				Name:      "requests",
+				Version:   "2.28.0",
+				Checksum:  "sha256:def456",
+				SizeBytes: 128000,
+				CachedAt:  now.Add(-24 * time.Hour),
+				LastHitAt: nil,
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages?ecosystem=pypi&name=requests", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var got []db.Package
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	require.Len(t, got, 2)
+
+	// First version — all fields including last_hit_at
+	v0 := got[0]
+	assert.Equal(t, int64(10), v0.ID)
+	assert.Equal(t, "pypi", v0.Ecosystem)
+	assert.Equal(t, "requests", v0.Name)
+	assert.Equal(t, "2.31.0", v0.Version)
+	assert.Equal(t, "sha256:abc123", v0.Checksum)
+	assert.Equal(t, int64(131072), v0.SizeBytes)
+	assert.WithinDuration(t, now, v0.CachedAt, time.Second)
+	require.NotNil(t, v0.LastHitAt)
+	assert.WithinDuration(t, lastHit, *v0.LastHitAt, time.Second)
+
+	// Second version — last_hit_at is nil
+	v1 := got[1]
+	assert.Equal(t, int64(11), v1.ID)
+	assert.Equal(t, "2.28.0", v1.Version)
+	assert.Equal(t, "sha256:def456", v1.Checksum)
+	assert.Equal(t, int64(128000), v1.SizeBytes)
+	assert.Nil(t, v1.LastHitAt)
 }
 
 func TestHandlePackages_ListVersions_Empty(t *testing.T) {

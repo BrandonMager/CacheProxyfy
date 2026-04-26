@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { EcosystemBadge } from "@/components/ui/ecosystem-badge";
 import { formatBytes } from "@/lib/format";
 import type { Package } from "@/types/api";
@@ -10,7 +11,10 @@ const formatDate = (iso: string) =>
   });
 
 export const PackageRow = ({ pkg }: { pkg: Package }) => (
-  <div className="grid grid-cols-[90px_1fr_140px_90px_120px_120px] items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+  <Link
+    href={`/packages/${pkg.ecosystem}/${encodeURIComponent(pkg.name)}`}
+    className="grid grid-cols-[90px_1fr_140px_90px_120px_120px] items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+  >
     <div className="flex items-center justify-center">
       <EcosystemBadge ecosystem={pkg.ecosystem} />
     </div>
@@ -29,5 +33,5 @@ export const PackageRow = ({ pkg }: { pkg: Package }) => (
     <span className="text-sm text-gray-500 dark:text-gray-400">
       {pkg.last_hit_at ? formatDate(pkg.last_hit_at) : "—"}
     </span>
-  </div>
+  </Link>
 );
