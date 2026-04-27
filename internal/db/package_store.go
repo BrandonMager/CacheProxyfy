@@ -96,15 +96,16 @@ func (db *DB) TouchPackage(ctx context.Context, ecosystem, name, version string)
 	return nil
 }
 
-func (db *DB) ListVersions(ctx context.Context, ecosystem, name string) ([]Package, error){
+func (db *DB) ListVersions(ctx context.Context, ecosystem, name string, limit, offset int) ([]Package, error){
 	const q = `
 		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
 		FROM packages
 		WHERE ecosystem = $1 AND name = $2
 		ORDER BY cached_at DESC
+		LIMIT $3 OFFSET $4
 	`
 
-	rows, err := db.QueryContext(ctx, q, ecosystem, name)
+	rows, err := db.QueryContext(ctx, q, ecosystem, name, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("db: list versions: %w", err)
 	}
