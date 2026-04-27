@@ -1,4 +1,4 @@
-import type { CVEAlert, ConfigResponse, Package, PackageSummary, Stats } from "@/types/api";
+import type { CVEAlert, ConfigResponse, Package, PackageSummary, PaginatedResponse, Stats } from "@/types/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:9090";
 
@@ -17,11 +17,16 @@ export function getStats(since?: string): Promise<Stats> {
   return apiFetch<Stats>(`/api/stats${params}`);
 }
 
-// GET /api/packages/summaries[?ecosystem=<eco>]
+// GET /api/packages/summaries[?ecosystem=<eco>&page=1&page_size=25]
 // Returns one row per unique (ecosystem, name) with the latest cached version.
-export function listPackageSummaries(ecosystem?: string): Promise<PackageSummary[]> {
-  const params = ecosystem ? `?ecosystem=${encodeURIComponent(ecosystem)}` : "";
-  return apiFetch<PackageSummary[]>(`/api/packages/summaries${params}`);
+export function listPackageSummaries(
+  ecosystem?: string,
+  page = 1,
+  pageSize = 25
+): Promise<PaginatedResponse<PackageSummary>> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (ecosystem) params.set("ecosystem", ecosystem);
+  return apiFetch<PaginatedResponse<PackageSummary>>(`/api/packages/summaries?${params}`);
 }
 
 // GET /api/packages/list[?ecosystem=<eco>]
@@ -41,14 +46,16 @@ export function getPackage(
   return apiFetch<Package>(`/api/packages?${params}`);
 }
 
-// GET /api/packages?ecosystem=&name=
-// Returns all cached versions of a package.
+// GET /api/packages?ecosystem=&name=[&page=1&page_size=25]
+// Returns all cached versions of a package, paginated.
 export function listVersions(
   ecosystem: string,
-  name: string
-): Promise<Package[]> {
-  const params = new URLSearchParams({ ecosystem, name });
-  return apiFetch<Package[]>(`/api/packages?${params}`);
+  name: string,
+  page = 1,
+  pageSize = 25
+): Promise<PaginatedResponse<Package>> {
+  const params = new URLSearchParams({ ecosystem, name, page: String(page), page_size: String(pageSize) });
+  return apiFetch<PaginatedResponse<Package>>(`/api/packages?${params}`);
 }
 
 // GET /api/packages/cve-alerts?ecosystem=&name=&version=

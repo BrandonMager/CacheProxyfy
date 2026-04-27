@@ -30,6 +30,13 @@ export interface PackageSummary {
   last_hit_at: string | null;
 }
 
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface Stats {
   total_packages: number;
   total_hits: number;
