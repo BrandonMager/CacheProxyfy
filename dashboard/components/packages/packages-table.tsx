@@ -4,10 +4,18 @@ import { useState } from "react";
 import type { PackageSummary } from "@/types/api";
 import { EcosystemTabs, type EcosystemTab } from "./ecosystem-tabs";
 import { PackageRow } from "./package-row";
+import { Pagination } from "@/components/ui/pagination";
 
 const COLUMNS = ["Ecosystem", "Name", "Latest Cached", "Versions", "Total Size", "Last Cached", "Last Hit"];
 
-export const PackagesTable = ({ summaries }: { summaries: PackageSummary[] }) => {
+interface PackagesTableProps {
+  summaries: PackageSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export const PackagesTable = ({ summaries, total, page, pageSize }: PackagesTableProps) => {
   const [activeTab, setActiveTab] = useState<EcosystemTab>("All");
 
   const filtered =
@@ -23,7 +31,7 @@ export const PackagesTable = ({ summaries }: { summaries: PackageSummary[] }) =>
             Cached Packages
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-            {filtered.length} package{filtered.length !== 1 ? "s" : ""}
+            {total} package{total !== 1 ? "s" : ""}
           </p>
         </div>
         <EcosystemTabs active={activeTab} onChange={setActiveTab} />
@@ -52,6 +60,15 @@ export const PackagesTable = ({ summaries }: { summaries: PackageSummary[] }) =>
             <PackageRow key={`${s.ecosystem}:${s.name}`} summary={s} />
           ))
         )}
+      </div>
+
+      <div className="border-t border-gray-100 dark:border-gray-800 px-4">
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          buildHref={(p) => `/packages?page=${p}&page_size=${pageSize}`}
+        />
       </div>
     </div>
   );
