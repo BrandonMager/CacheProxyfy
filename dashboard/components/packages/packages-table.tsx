@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { PackageSummary } from "@/types/api";
 import { EcosystemTabs, type EcosystemTab } from "./ecosystem-tabs";
 import { PackageRow } from "./package-row";
@@ -13,15 +13,17 @@ interface PackagesTableProps {
   total: number;
   page: number;
   pageSize: number;
+  activeEcosystem: EcosystemTab;
 }
 
-export const PackagesTable = ({ summaries, total, page, pageSize }: PackagesTableProps) => {
-  const [activeTab, setActiveTab] = useState<EcosystemTab>("All");
+export const PackagesTable = ({ summaries, total, page, pageSize, activeEcosystem }: PackagesTableProps) => {
+  const router = useRouter();
 
-  const filtered =
-    activeTab === "All"
-      ? summaries
-      : summaries.filter((s) => s.ecosystem === activeTab);
+  const handleTabChange = (tab: EcosystemTab) => {
+    const params = new URLSearchParams({ page: "1", page_size: String(pageSize) });
+    if (tab !== "All") params.set("ecosystem", tab);
+    router.push(`/packages?${params}`);
+  };
 
   return (
     <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm">
@@ -34,7 +36,7 @@ export const PackagesTable = ({ summaries, total, page, pageSize }: PackagesTabl
             {total} package{total !== 1 ? "s" : ""}
           </p>
         </div>
-        <EcosystemTabs active={activeTab} onChange={setActiveTab} />
+        <EcosystemTabs active={activeEcosystem} onChange={handleTabChange} />
       </div>
 
       <div className="grid grid-cols-[90px_1fr_160px_60px_100px_120px_120px] gap-4 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 rounded-t-none">
@@ -51,12 +53,12 @@ export const PackagesTable = ({ summaries, total, page, pageSize }: PackagesTabl
       </div>
 
       <div className="divide-y divide-gray-100 dark:divide-gray-800">
-        {filtered.length === 0 ? (
+        {summaries.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
             No packages found.
           </p>
         ) : (
-          filtered.map((s) => (
+          summaries.map((s) => (
             <PackageRow key={`${s.ecosystem}:${s.name}`} summary={s} />
           ))
         )}
@@ -67,7 +69,11 @@ export const PackagesTable = ({ summaries, total, page, pageSize }: PackagesTabl
           page={page}
           pageSize={pageSize}
           total={total}
-          buildHref={(p) => `/packages?page=${p}&page_size=${pageSize}`}
+          buildHref={(p) => {
+            const params = new URLSearchParams({ page: String(p), page_size: String(pageSize) });
+            if (activeEcosystem !== "All") params.set("ecosystem", activeEcosystem);
+            return `/packages?${params}`;
+          }}
         />
       </div>
     </div>
