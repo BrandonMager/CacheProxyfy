@@ -25,9 +25,11 @@ const packages: Package[] = [
   { ...base, id: 2, version: "2.28.0", size_bytes: 65536, last_hit_at: "2024-01-20T12:00:00Z" },
 ];
 
+const tableProps = { total: 2, page: 1, pageSize: 25, basePath: "/packages/pypi/requests" };
+
 describe("VersionsTable", () => {
   it("renders a row for every version", () => {
-    render(<VersionsTable packages={packages} />);
+    render(<VersionsTable packages={packages} {...tableProps} />);
 
     // getAllByRole returns an array — if fewer or more elements are found the
     // test fails, so this doubles as a count assertion.
@@ -36,7 +38,7 @@ describe("VersionsTable", () => {
   });
 
   it("renders all column headers", () => {
-    render(<VersionsTable packages={packages} />);
+    render(<VersionsTable packages={packages} {...tableProps} />);
 
     expect(screen.getByText("Version")).toBeInTheDocument();
     expect(screen.getByText("Size")).toBeInTheDocument();
@@ -45,7 +47,7 @@ describe("VersionsTable", () => {
   });
 
   it("renders correct metadata for each version", () => {
-    render(<VersionsTable packages={packages} />);
+    render(<VersionsTable packages={packages} {...tableProps} />);
 
     expect(screen.getByText("2.31.0")).toBeInTheDocument();
     expect(screen.getByText("128.0 KB")).toBeInTheDocument();
@@ -55,7 +57,7 @@ describe("VersionsTable", () => {
   });
 
   it("each row links to the correct detail page", () => {
-    render(<VersionsTable packages={packages} />);
+    render(<VersionsTable packages={packages} {...tableProps} />);
 
     const rows = screen.getAllByRole("link");
 
@@ -72,7 +74,7 @@ describe("VersionsTable", () => {
   });
 
   it("shows a dash when last_hit_at is null and a date when set", () => {
-    render(<VersionsTable packages={packages} />);
+    render(<VersionsTable packages={packages} {...tableProps} />);
 
     const rows = screen.getAllByRole("link");
 
@@ -84,7 +86,7 @@ describe("VersionsTable", () => {
   });
 
   it("shows an empty state when there are no versions", () => {
-    render(<VersionsTable packages={[]} />);
+    render(<VersionsTable packages={[]} {...tableProps} total={0} />);
 
     expect(screen.getByText("No versions found.")).toBeInTheDocument();
 

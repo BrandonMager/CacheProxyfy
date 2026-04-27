@@ -193,11 +193,11 @@ func TestListVersions_ReturnsPackages(t *testing.T) {
 		AddRow(int64(2), "npm", "lodash", "4.17.20", "def456", int64(480), now, nil)
 
 	mock.ExpectQuery("SELECT id, ecosystem").
-		WithArgs("npm", "lodash").
+		WithArgs("npm", "lodash", 25, 0).
 		WillReturnRows(rows)
 
 	db := &DB{sqlDB}
-	pkgs, err := db.ListVersions(context.Background(), "npm", "lodash")
+	pkgs, err := db.ListVersions(context.Background(), "npm", "lodash", 25, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,14 +217,14 @@ func TestListVersions_Empty(t *testing.T) {
 	defer sqlDB.Close()
 
 	mock.ExpectQuery("SELECT id, ecosystem").
-		WithArgs("npm", "nonexistent").
+		WithArgs("npm", "nonexistent", 25, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "ecosystem", "name", "version",
 			"checksum", "size_bytes", "cached_at", "last_hit_at",
 		}))
 
 	db := &DB{sqlDB}
-	pkgs, err := db.ListVersions(context.Background(), "npm", "nonexistent")
+	pkgs, err := db.ListVersions(context.Background(), "npm", "nonexistent", 25, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestListVersions_QueryError(t *testing.T) {
 		WillReturnError(errors.New("query failed"))
 
 	db := &DB{sqlDB}
-	_, err = db.ListVersions(context.Background(), "npm", "lodash")
+	_, err = db.ListVersions(context.Background(), "npm", "lodash", 25, 0)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -270,7 +270,7 @@ func TestListVersions_ScanError(t *testing.T) {
 		WillReturnRows(rows)
 
 	db := &DB{sqlDB}
-	_, err = db.ListVersions(context.Background(), "npm", "lodash")
+	_, err = db.ListVersions(context.Background(), "npm", "lodash", 25, 0)
 	if err == nil {
 		t.Fatal("expected scan error, got nil")
 	}
@@ -547,7 +547,7 @@ func TestPackageStore_Integration(t *testing.T) {
 			t.Fatalf("UpsertPackage v2: %v", err)
 		}
 
-		pkgs, err := db.ListVersions(ctx, "npm", "lodash")
+		pkgs, err := db.ListVersions(ctx, "npm", "lodash", 25, 0)
 		if err != nil {
 			t.Fatalf("ListVersions: %v", err)
 		}
@@ -560,7 +560,7 @@ func TestPackageStore_Integration(t *testing.T) {
 	})
 
 	t.Run("ListVersions unknown package returns empty", func(t *testing.T) {
-		pkgs, err := db.ListVersions(ctx, "npm", "nonexistent")
+		pkgs, err := db.ListVersions(ctx, "npm", "nonexistent", 25, 0)
 		if err != nil {
 			t.Fatalf("ListVersions: %v", err)
 		}

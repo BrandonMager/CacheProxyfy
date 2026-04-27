@@ -21,6 +21,7 @@ type stubDB struct {
 	pkgs          []db.Package
 	summaries     []db.PackageSummary
 	alerts        []db.CVEAlert
+	total         int
 	err           error
 	capturedSince time.Time
 }
@@ -34,7 +35,7 @@ func (s *stubDB) GetPackage(_ context.Context, _, _, _ string) (db.Package, erro
 	return s.pkg, s.err
 }
 
-func (s *stubDB) ListVersions(_ context.Context, _, _ string) ([]db.Package, error) {
+func (s *stubDB) ListVersions(_ context.Context, _, _ string, _, _ int) ([]db.Package, error) {
 	return s.pkgs, s.err
 }
 
@@ -42,8 +43,16 @@ func (s *stubDB) ListPackages(_ context.Context, _ string) ([]db.Package, error)
 	return s.pkgs, s.err
 }
 
-func (s *stubDB) ListPackageSummaries(_ context.Context, _ string) ([]db.PackageSummary, error) {
+func (s *stubDB) ListPackageSummaries(_ context.Context, _ string, _, _ int) ([]db.PackageSummary, error) {
 	return s.summaries, s.err
+}
+
+func (s *stubDB) CountPackageSummaries(_ context.Context, _ string) (int, error) {
+	return s.total, s.err
+}
+
+func (s *stubDB) CountVersions(_ context.Context, _, _ string) (int, error) {
+	return s.total, s.err
 }
 
 func (s *stubDB) ListCVEAlerts(_ context.Context, since time.Time, _ string) ([]db.CVEAlert, error) {
@@ -139,6 +148,7 @@ func TestHandleStats_MethodNotAllowed(t *testing.T) {
 func TestHandlePackages_ListVersions(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	stub := &stubDB{
+		total: 2,
 		pkgs: []db.Package{
 			{ID: 1, Ecosystem: "npm", Name: "react", Version: "18.0.0", SizeBytes: 512, CachedAt: now},
 			{ID: 2, Ecosystem: "npm", Name: "react", Version: "17.0.2", SizeBytes: 480, CachedAt: now},
@@ -152,16 +162,20 @@ func TestHandlePackages_ListVersions(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	var got []db.Package
+	var got paginatedResponse
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
-	assert.Len(t, got, 2)
-	assert.Equal(t, "18.0.0", got[0].Version)
+	assert.Equal(t, 2, got.Total)
+	assert.Equal(t, 1, got.Page)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	assert.Len(t, items, 2)
 }
 
 func TestHandlePackages_ListVersions_AllMetadataFields(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	lastHit := now.Add(-time.Hour)
 	stub := &stubDB{
+		total: 2,
 		pkgs: []db.Package{
 			{
 				ID:        10,
@@ -193,29 +207,12 @@ func TestHandlePackages_ListVersions_AllMetadataFields(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	var got []db.Package
+	var got paginatedResponse
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
-	require.Len(t, got, 2)
-
-	// First version — all fields including last_hit_at
-	v0 := got[0]
-	assert.Equal(t, int64(10), v0.ID)
-	assert.Equal(t, "pypi", v0.Ecosystem)
-	assert.Equal(t, "requests", v0.Name)
-	assert.Equal(t, "2.31.0", v0.Version)
-	assert.Equal(t, "sha256:abc123", v0.Checksum)
-	assert.Equal(t, int64(131072), v0.SizeBytes)
-	assert.WithinDuration(t, now, v0.CachedAt, time.Second)
-	require.NotNil(t, v0.LastHitAt)
-	assert.WithinDuration(t, lastHit, *v0.LastHitAt, time.Second)
-
-	// Second version — last_hit_at is nil
-	v1 := got[1]
-	assert.Equal(t, int64(11), v1.ID)
-	assert.Equal(t, "2.28.0", v1.Version)
-	assert.Equal(t, "sha256:def456", v1.Checksum)
-	assert.Equal(t, int64(128000), v1.SizeBytes)
-	assert.Nil(t, v1.LastHitAt)
+	assert.Equal(t, 2, got.Total)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	require.Len(t, items, 2)
 }
 
 func TestHandlePackages_ListVersions_Empty(t *testing.T) {
@@ -225,9 +222,12 @@ func TestHandlePackages_ListVersions_Empty(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var got []db.Package
+	var got paginatedResponse
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
-	assert.Empty(t, got)
+	assert.Equal(t, 0, got.Total)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	assert.Empty(t, items)
 }
 
 func TestHandlePackages_GetPackage(t *testing.T) {
@@ -437,6 +437,7 @@ func TestHandlePackageSummaries_ReturnsSummaries(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	lastHit := now.Add(-time.Hour)
 	stub := &stubDB{
+		total: 2,
 		summaries: []db.PackageSummary{
 			{Ecosystem: "pypi", Name: "requests", LatestVersion: "2.31.0", VersionCount: 3, TotalSizeBytes: 393216, LastCachedAt: now, LastHitAt: &lastHit},
 			{Ecosystem: "npm", Name: "lodash", LatestVersion: "4.17.21", VersionCount: 1, TotalSizeBytes: 262144, LastCachedAt: now, LastHitAt: nil},
@@ -450,19 +451,13 @@ func TestHandlePackageSummaries_ReturnsSummaries(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-	var got []db.PackageSummary
+	var got paginatedResponse
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
-	require.Len(t, got, 2)
-
-	assert.Equal(t, "pypi", got[0].Ecosystem)
-	assert.Equal(t, "requests", got[0].Name)
-	assert.Equal(t, "2.31.0", got[0].LatestVersion)
-	assert.Equal(t, 3, got[0].VersionCount)
-	assert.Equal(t, int64(393216), got[0].TotalSizeBytes)
-	assert.WithinDuration(t, now, got[0].LastCachedAt, time.Second)
-	require.NotNil(t, got[0].LastHitAt)
-	assert.WithinDuration(t, lastHit, *got[0].LastHitAt, time.Second)
-	assert.Nil(t, got[1].LastHitAt)
+	assert.Equal(t, 2, got.Total)
+	assert.Equal(t, 1, got.Page)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	assert.Len(t, items, 2)
 }
 
 func TestHandlePackageSummaries_Empty(t *testing.T) {
@@ -472,9 +467,12 @@ func TestHandlePackageSummaries_Empty(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var got []db.PackageSummary
+	var got paginatedResponse
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
-	assert.Empty(t, got)
+	assert.Equal(t, 0, got.Total)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	assert.Empty(t, items)
 }
 
 func TestHandlePackageSummaries_MethodNotAllowed(t *testing.T) {

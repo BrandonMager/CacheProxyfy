@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/BrandonMager/CacheProxyfy/internal/config"
@@ -16,9 +17,11 @@ import (
 type DBClient interface {
 	GetStats(ctx context.Context, since time.Time) (db.Stats, error)
 	GetPackage(ctx context.Context, ecosystem, name, version string) (db.Package, error)
-	ListVersions(ctx context.Context, ecosystem, name string) ([]db.Package, error)
+	ListVersions(ctx context.Context, ecosystem, name string, limit, offset int) ([]db.Package, error)
 	ListPackages(ctx context.Context, ecosystem string) ([]db.Package, error)
-	ListPackageSummaries(ctx context.Context, ecosystem string) ([]db.PackageSummary, error)
+	ListPackageSummaries(ctx context.Context, ecosystem string, limit, offset int) ([]db.PackageSummary, error)
+	CountPackageSummaries(ctx context.Context, ecosystem string) (int, error)
+	CountVersions(ctx context.Context, ecosystem, name string) (int, error)
 	ListCVEAlerts(ctx context.Context, since time.Time, ecosystem string) ([]db.CVEAlert, error)
 	ListPackageCVEAlerts(ctx context.Context, ecosystem, name, version string) ([]db.CVEAlert, error)
 }
@@ -103,7 +106,16 @@ func (h *Handler) handlePackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pkgs, err := h.db.ListVersions(r.Context(), ecosystem, name)
+	page, pageSize := parsePage(r)
+	offset := (page - 1) * pageSize
+
+	total, err := h.db.CountVersions(r.Context(), ecosystem, name)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	pkgs, err := h.db.ListVersions(r.Context(), ecosystem, name, pageSize, offset)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -111,7 +123,12 @@ func (h *Handler) handlePackages(w http.ResponseWriter, r *http.Request) {
 	if pkgs == nil {
 		pkgs = []db.Package{}
 	}
-	writeJSON(w, pkgs)
+	writeJSON(w, paginatedResponse{
+		Items:    pkgs,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
 }
 
 // handlePackageList handles GET /api/packages/list[?ecosystem=<eco>]
@@ -137,10 +154,10 @@ func (h *Handler) handlePackageList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, pkgs)
 }
 
-// handlePackageSummaries handles GET /api/packages/summaries[?ecosystem=<eco>]
+// handlePackageSummaries handles GET /api/packages/summaries[?ecosystem=<eco>&page=1&page_size=25]
 //
 // Returns one row per unique (ecosystem, name) with the latest cached version,
-// total version count, total size, and last hit time.
+// total version count, total size, and last hit time. Results are paginated.
 func (h *Handler) handlePackageSummaries(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -148,8 +165,16 @@ func (h *Handler) handlePackageSummaries(w http.ResponseWriter, r *http.Request)
 	}
 
 	ecosystem := r.URL.Query().Get("ecosystem")
+	page, pageSize := parsePage(r)
+	offset := (page - 1) * pageSize
 
-	summaries, err := h.db.ListPackageSummaries(r.Context(), ecosystem)
+	total, err := h.db.CountPackageSummaries(r.Context(), ecosystem)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	summaries, err := h.db.ListPackageSummaries(r.Context(), ecosystem, pageSize, offset)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -157,7 +182,12 @@ func (h *Handler) handlePackageSummaries(w http.ResponseWriter, r *http.Request)
 	if summaries == nil {
 		summaries = []db.PackageSummary{}
 	}
-	writeJSON(w, summaries)
+	writeJSON(w, paginatedResponse{
+		Items:    summaries,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	})
 }
 
 // handlePackageCVEAlerts handles GET /api/packages/cve-alerts?ecosystem=&name=&version=
@@ -332,4 +362,30 @@ type logConfigResponse struct {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
+
+// paginatedResponse wraps a slice of items with pagination metadata.
+type paginatedResponse struct {
+	Items    any `json:"items"`
+	Total    int `json:"total"`
+	Page     int `json:"page"`
+	PageSize int `json:"page_size"`
+}
+
+// parsePage reads page and page_size query params.
+// Defaults: page=1, page_size=25. page_size is clamped to [1, 100].
+func parsePage(r *http.Request) (page, pageSize int) {
+	page = 1
+	pageSize = 25
+	q := r.URL.Query()
+	if p, err := strconv.Atoi(q.Get("page")); err == nil && p > 0 {
+		page = p
+	}
+	if ps, err := strconv.Atoi(q.Get("page_size")); err == nil && ps > 0 {
+		if ps > 100 {
+			ps = 100
+		}
+		pageSize = ps
+	}
+	return
 }
