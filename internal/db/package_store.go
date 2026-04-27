@@ -300,6 +300,53 @@ func (db *DB) ListPackages(ctx context.Context, ecosystem string) ([]Package, er
 	return pkgs, rows.Err()
 }
 
+// ListExpiredPackages returns all packages whose last access time (last_hit_at,
+// or cached_at if never hit) is older than olderThan, ordered oldest first.
+func (db *DB) ListExpiredPackages(ctx context.Context, olderThan time.Time) ([]Package, error) {
+	const q = `
+		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
+		FROM packages
+		WHERE COALESCE(last_hit_at, cached_at) < $1
+		ORDER BY COALESCE(last_hit_at, cached_at) ASC
+	`
+
+	rows, err := db.QueryContext(ctx, q, olderThan)
+	if err != nil {
+		return nil, fmt.Errorf("db: list expired packages: %w", err)
+	}
+	defer rows.Close()
+
+	var pkgs []Package
+	for rows.Next() {
+		var pkg Package
+		if err := rows.Scan(
+			&pkg.ID,
+			&pkg.Ecosystem,
+			&pkg.Name,
+			&pkg.Version,
+			&pkg.Checksum,
+			&pkg.SizeBytes,
+			&pkg.CachedAt,
+			&pkg.LastHitAt,
+		); err != nil {
+			return nil, fmt.Errorf("db: list expired packages scan: %w", err)
+		}
+		pkgs = append(pkgs, pkg)
+	}
+
+	return pkgs, rows.Err()
+}
+
+// DeletePackage removes a package row by its primary key.
+func (db *DB) DeletePackage(ctx context.Context, id int64) error {
+	const q = `DELETE FROM packages WHERE id = $1`
+	_, err := db.ExecContext(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("db: delete package: %w", err)
+	}
+	return nil
+}
+
 func (db *DB) RecordEvent(ctx context.Context, ecosystem, name, version, event string, bytes int64) error {
 	const q = `
 		INSERT INTO cache_events (ecosystem, name, version, event, bytes)
