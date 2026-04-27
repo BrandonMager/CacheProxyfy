@@ -22,9 +22,10 @@ type ProxyConfig struct {
 }
 
 type CacheConfig struct {
-	Backend  string `mapstructure:"backend"`
-	LocalDir string `mapstructure:"local_dir"`
-	TTLHours int    `mapstructure:"ttl_hours"`
+	Backend               string `mapstructure:"backend"`
+	LocalDir              string `mapstructure:"local_dir"`
+	TTLHours              int    `mapstructure:"ttl_hours"`
+	EvictionIntervalHours int    `mapstructure:"eviction_interval_hours"`
 }
 
 type S3Config struct {
@@ -86,6 +87,8 @@ func Load() (*Config, error) {
 	v.SetDefault("database.port", 5432)
 	//v.SetDefault("database.dbname", "cacheproxyfy")
 	v.SetDefault("database.sslmode", "disable")
+
+	v.SetDefault("cache.eviction_interval_hours", 1)
 
 	v.SetDefault("security.cve_scanning", false)
 	v.SetDefault("security.block_severity", "CRITICAL")

@@ -107,4 +107,7 @@ const schema = `
 
 	CREATE INDEX IF NOT EXISTS cve_alerts_ecosystem_name
 		ON cve_alerts (ecosystem, name);
+
+	CREATE INDEX IF NOT EXISTS packages_last_accessed
+		ON packages (COALESCE(last_hit_at, cached_at));
 `

@@ -8,6 +8,8 @@ proxy:
 cache:
   backend: local       # "local" or "s3"
   local_dir: ./data/artifacts
+  ttl_hours: 720
+  eviction_interval_hours: 1
 
 s3:
   bucket: ""           # required when backend=s3
@@ -27,7 +29,7 @@ database:
   port: 5432
   user: postgres
   password: ""
-  dbname: cacheproxyfy
+  dbname: postgres
   sslmode: disable
 
 security:
