@@ -125,7 +125,7 @@ func run(logger *slog.Logger) error {
 	api.NewHandler(database, cfg).RegisterRoutes(metricsMux)
 
 	metricsSrv := &http.Server{
-		Addr:         "127.0.0.1:9090",
+		Addr:         ":9090",
 		Handler:      metricsMux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
