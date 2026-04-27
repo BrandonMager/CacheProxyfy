@@ -59,6 +59,11 @@ func (w *Worker) Run(ctx context.Context) {
 		interval = time.Hour
 	}
 
+	// Run one cycle immediately on startup, then on every tick.
+	if err := w.evict(ctx); err != nil {
+		w.logger.Error("eviction cycle failed", "error", err)
+	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
