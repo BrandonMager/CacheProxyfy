@@ -19,6 +19,7 @@ type stubDB struct {
 	stats         db.Stats
 	pkg           db.Package
 	pkgs          []db.Package
+	summaries     []db.PackageSummary
 	alerts        []db.CVEAlert
 	err           error
 	capturedSince time.Time
@@ -39,6 +40,10 @@ func (s *stubDB) ListVersions(_ context.Context, _, _ string) ([]db.Package, err
 
 func (s *stubDB) ListPackages(_ context.Context, _ string) ([]db.Package, error) {
 	return s.pkgs, s.err
+}
+
+func (s *stubDB) ListPackageSummaries(_ context.Context, _ string) ([]db.PackageSummary, error) {
+	return s.summaries, s.err
 }
 
 func (s *stubDB) ListCVEAlerts(_ context.Context, since time.Time, _ string) ([]db.CVEAlert, error) {
@@ -420,6 +425,70 @@ func TestHandleCVEAlerts_DBError(t *testing.T) {
 	stub := &stubDB{err: errors.New("timeout")}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/cve-alerts", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── /api/packages/summaries ───────────────────────────────────────────────────
+
+func TestHandlePackageSummaries_ReturnsSummaries(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	lastHit := now.Add(-time.Hour)
+	stub := &stubDB{
+		summaries: []db.PackageSummary{
+			{Ecosystem: "pypi", Name: "requests", LatestVersion: "2.31.0", VersionCount: 3, TotalSizeBytes: 393216, LastCachedAt: now, LastHitAt: &lastHit},
+			{Ecosystem: "npm", Name: "lodash", LatestVersion: "4.17.21", VersionCount: 1, TotalSizeBytes: 262144, LastCachedAt: now, LastHitAt: nil},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/summaries", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var got []db.PackageSummary
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	require.Len(t, got, 2)
+
+	assert.Equal(t, "pypi", got[0].Ecosystem)
+	assert.Equal(t, "requests", got[0].Name)
+	assert.Equal(t, "2.31.0", got[0].LatestVersion)
+	assert.Equal(t, 3, got[0].VersionCount)
+	assert.Equal(t, int64(393216), got[0].TotalSizeBytes)
+	assert.WithinDuration(t, now, got[0].LastCachedAt, time.Second)
+	require.NotNil(t, got[0].LastHitAt)
+	assert.WithinDuration(t, lastHit, *got[0].LastHitAt, time.Second)
+	assert.Nil(t, got[1].LastHitAt)
+}
+
+func TestHandlePackageSummaries_Empty(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/summaries", nil)
+	w := httptest.NewRecorder()
+	newMux(&stubDB{}).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got []db.PackageSummary
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Empty(t, got)
+}
+
+func TestHandlePackageSummaries_MethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/packages/summaries", nil)
+	w := httptest.NewRecorder()
+	newMux(&stubDB{}).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestHandlePackageSummaries_DBError(t *testing.T) {
+	stub := &stubDB{err: errors.New("connection reset")}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/summaries", nil)
 	w := httptest.NewRecorder()
 	newMux(stub).ServeHTTP(w, req)
 
