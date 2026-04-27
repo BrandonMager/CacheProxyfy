@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { formatBytes } from "@/lib/format";
 import type { Package } from "@/types/api";
+import { Pagination } from "@/components/ui/pagination";
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString("en-US", {
@@ -11,11 +12,21 @@ const formatDate = (iso: string) =>
 
 const COLUMNS = ["Version", "Size", "Cached", "Last Hit"];
 
+interface VersionsTableProps {
+  packages: Package[];
+  total: number;
+  page: number;
+  pageSize: number;
+  basePath: string;
+}
+
 export const VersionsTable = ({
   packages,
-}: {
-  packages: Package[];
-}) => (
+  total,
+  page,
+  pageSize,
+  basePath,
+}: VersionsTableProps) => (
   <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm">
     <div className="grid grid-cols-[1fr_90px_120px_120px] gap-4 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 rounded-t-xl">
       {COLUMNS.map((col) => (
@@ -55,6 +66,15 @@ export const VersionsTable = ({
           </Link>
         ))
       )}
+    </div>
+
+    <div className="border-t border-gray-100 dark:border-gray-800 px-4">
+      <Pagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        buildHref={(p) => `${basePath}?page=${p}&page_size=${pageSize}`}
+      />
     </div>
   </div>
 );
