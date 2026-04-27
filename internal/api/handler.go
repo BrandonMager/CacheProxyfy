@@ -19,6 +19,7 @@ type DBClient interface {
 	ListVersions(ctx context.Context, ecosystem, name string) ([]db.Package, error)
 	ListPackages(ctx context.Context, ecosystem string) ([]db.Package, error)
 	ListCVEAlerts(ctx context.Context, since time.Time, ecosystem string) ([]db.CVEAlert, error)
+	ListPackageCVEAlerts(ctx context.Context, ecosystem, name, version string) ([]db.CVEAlert, error)
 }
 
 type Handler struct {
@@ -36,6 +37,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stats", h.handleStats)
 	mux.HandleFunc("/api/packages", h.handlePackages)
 	mux.HandleFunc("/api/packages/list", h.handlePackageList)
+	mux.HandleFunc("/api/packages/cve-alerts", h.handlePackageCVEAlerts)
 	mux.HandleFunc("/api/cve-alerts", h.handleCVEAlerts)
 	mux.HandleFunc("/api/config", h.handleConfig)
 }
@@ -131,6 +133,37 @@ func (h *Handler) handlePackageList(w http.ResponseWriter, r *http.Request) {
 		pkgs = []db.Package{}
 	}
 	writeJSON(w, pkgs)
+}
+
+// handlePackageCVEAlerts handles GET /api/packages/cve-alerts?ecosystem=&name=&version=
+//
+// Returns all CVE alerts ever recorded for the given package version.
+// Required query params: ecosystem, name, version
+func (h *Handler) handlePackageCVEAlerts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	q := r.URL.Query()
+	ecosystem := q.Get("ecosystem")
+	name := q.Get("name")
+	version := q.Get("version")
+
+	if ecosystem == "" || name == "" || version == "" {
+		http.Error(w, "ecosystem, name and version are required", http.StatusBadRequest)
+		return
+	}
+
+	alerts, err := h.db.ListPackageCVEAlerts(r.Context(), ecosystem, name, version)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if alerts == nil {
+		alerts = []db.CVEAlert{}
+	}
+	writeJSON(w, alerts)
 }
 
 // handleCVEAlerts handles GET /api/cve-alerts?since=<duration>[&ecosystem=<eco>]

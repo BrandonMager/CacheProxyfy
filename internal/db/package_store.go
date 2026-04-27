@@ -221,6 +221,34 @@ type CVEAlert struct {
 	RecordedAt time.Time `json:"recorded_at"`
 }
 
+// ListPackageCVEAlerts returns all CVE alerts ever recorded for a specific
+// package version, ordered from most to least recent.
+func (db *DB) ListPackageCVEAlerts(ctx context.Context, ecosystem, name, version string) ([]CVEAlert, error) {
+	const q = `
+		SELECT id, ecosystem, name, version, cve_id, severity, outcome, recorded_at
+		FROM cve_alerts
+		WHERE ecosystem = $1 AND name = $2 AND version = $3
+		ORDER BY recorded_at DESC
+	`
+
+	rows, err := db.QueryContext(ctx, q, ecosystem, name, version)
+	if err != nil {
+		return nil, fmt.Errorf("db: list package cve alerts: %w", err)
+	}
+	defer rows.Close()
+
+	var alerts []CVEAlert
+	for rows.Next() {
+		var a CVEAlert
+		if err := rows.Scan(&a.ID, &a.Ecosystem, &a.Name, &a.Version, &a.CVEID, &a.Severity, &a.Outcome, &a.RecordedAt); err != nil {
+			return nil, fmt.Errorf("db: list package cve alerts scan: %w", err)
+		}
+		alerts = append(alerts, a)
+	}
+
+	return alerts, rows.Err()
+}
+
 // ListCVEAlerts returns CVE alerts since the given time.
 // If ecosystem is non-empty, results are filtered to that ecosystem.
 func (db *DB) ListCVEAlerts(ctx context.Context, since time.Time, ecosystem string) ([]CVEAlert, error) {

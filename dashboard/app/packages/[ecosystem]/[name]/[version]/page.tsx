@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
 import { SidebarLayout } from "@/components/layout/sidebar-layout";
 import { PackageDetail } from "@/components/packages/package-detail";
+import { CVEAlertsSection } from "@/components/packages/cve-alerts-section";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
-import { getPackage } from "@/lib/api";
+import { getPackage, listPackageCVEAlerts } from "@/lib/api";
 
 export default async function PackageDetailPage({
   params,
@@ -13,9 +14,10 @@ export default async function PackageDetailPage({
   const decodedName = decodeURIComponent(name);
   const decodedVersion = decodeURIComponent(version);
 
-  const pkg = await getPackage(ecosystem, decodedName, decodedVersion).catch(
-    () => null
-  );
+  const [pkg, alerts] = await Promise.all([
+    getPackage(ecosystem, decodedName, decodedVersion).catch(() => null),
+    listPackageCVEAlerts(ecosystem, decodedName, decodedVersion).catch(() => []),
+  ]);
 
   if (!pkg) notFound();
 
@@ -27,11 +29,12 @@ export default async function PackageDetailPage({
       <Breadcrumb
         crumbs={[
           { label: "Packages", href: "/packages" },
-          { label: decodedName, href: `/packages/${ecosystem}/${encodeURIComponent(name)}` },
+          { label: decodedName, href: `/packages/${ecosystem}/${encodeURIComponent(decodedName)}` },
           { label: decodedVersion },
         ]}
       />
       <PackageDetail pkg={pkg} />
+      <CVEAlertsSection alerts={alerts} />
     </SidebarLayout>
   );
 }
