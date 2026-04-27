@@ -8,9 +8,14 @@ import (
 	"strings"
 )
 
-/* maven-metadata.xml is not included */
 var mavenArtifact = regexp.MustCompile(
-	`^/maven/(.+)/([^/]+)/([^/]+)/([^/]+\.(?:jar|pom))$`,
+	`^/maven/(.+)/([^/]+)/([^/]+)/([^/]+\.jar)$`,
+)
+
+// mavenMetadataPath matches maven-metadata.xml, .pom, .md5, and .sha1 requests
+// — all are proxied transparently without caching as artifacts.
+var mavenMetadataPath = regexp.MustCompile(
+	`^/maven/.+(/maven-metadata\.xml|\.pom|\.md5|\.sha1|\.sha256)$`,
 )
 
 type Maven struct {
@@ -23,7 +28,7 @@ func NewMaven() *Maven {
 
 func (m *Maven) Parse(r *http.Request) (*Package, error) {
 	path := r.URL.Path
-	if strings.HasSuffix(path, ".md5") || strings.HasSuffix(path, ".sha1") || strings.Contains(path, "maven-metadata") {
+	if mavenMetadataPath.MatchString(path) {
 		return nil, ErrNotPackageRequest
 	}
 
@@ -65,6 +70,24 @@ func (m *Maven) UpstreamURL(pkg *Package) string {
 	)
 }
 
-func (m *Maven) RewriteResponse(_ context.Context, body []byte, _ *Package) ([]byte, error){
+func (m *Maven) RewriteResponse(_ context.Context, body []byte, _ *Package) ([]byte, error) {
+	return body, nil
+}
+
+// IsMetadataRequest reports whether r is a Maven metadata request:
+// maven-metadata.xml, .pom, or checksum files (.md5, .sha1, .sha256).
+func (m *Maven) IsMetadataRequest(r *http.Request) bool {
+	return mavenMetadataPath.MatchString(r.URL.Path)
+}
+
+// MetadataUpstreamURL returns the upstream Maven Central URL for the metadata request.
+func (m *Maven) MetadataUpstreamURL(r *http.Request) string {
+	path := strings.TrimPrefix(r.URL.Path, "/maven")
+	return m.UpstreamBase + path
+}
+
+// RewriteMetadata is a no-op for Maven — metadata files (XML, POM, checksums)
+// do not contain URLs that need rewriting.
+func (m *Maven) RewriteMetadata(body []byte, _ string) ([]byte, error) {
 	return body, nil
 }
