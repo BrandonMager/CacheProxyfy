@@ -3,6 +3,7 @@ package ecosystem
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -81,5 +82,69 @@ func TestNPMUpstreamURL(t *testing.T) {
 	want := "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
 	if got != want {
 		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
+func TestNPMIsMetadataRequest(t *testing.T) {
+	n := NewNPM()
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/npm/lodash", true},
+		{"/npm/@babel/core", true},
+		{"/npm/lodash/-/lodash-4.17.21.tgz", false},
+		{"/npm/@babel/core/-/core-7.0.0.tgz", false},
+		{"/pypi/simple/requests/", false},
+	}
+
+	for _, tc := range cases {
+		r, _ := http.NewRequest(http.MethodGet, tc.path, nil)
+		if got := n.IsMetadataRequest(r); got != tc.want {
+			t.Errorf("IsMetadataRequest(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestNPMMetadataUpstreamURL(t *testing.T) {
+	n := NewNPM()
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/npm/lodash", "https://registry.npmjs.org/lodash"},
+		{"/npm/@babel/core", "https://registry.npmjs.org/@babel/core"},
+	}
+
+	for _, tc := range cases {
+		r, _ := http.NewRequest(http.MethodGet, tc.path, nil)
+		if got := n.MetadataUpstreamURL(r); got != tc.want {
+			t.Errorf("MetadataUpstreamURL(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestNPMRewriteMetadata(t *testing.T) {
+	n := NewNPM()
+	proxyBase := "http://localhost:8080"
+
+	body := []byte(`{
+		"name": "lodash",
+		"dist": {
+			"tarball": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
+		}
+	}`)
+
+	got, err := n.RewriteMetadata(body, proxyBase)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rewritten := string(got)
+	if strings.Contains(rewritten, "https://registry.npmjs.org") {
+		t.Error("expected registry.npmjs.org to be rewritten, but it still appears")
+	}
+	if !strings.Contains(rewritten, "http://localhost:8080/npm/lodash/-/lodash-4.17.21.tgz") {
+		t.Errorf("expected proxy tarball URL, got: %s", rewritten)
 	}
 }
