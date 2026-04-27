@@ -144,10 +144,29 @@ type PackageSummary struct {
 	LastHitAt      *time.Time `json:"last_hit_at"`
 }
 
+// CountPackageSummaries returns the total number of unique (ecosystem, name)
+// pairs, optionally filtered by ecosystem.
+func (db *DB) CountPackageSummaries(ctx context.Context, ecosystem string) (int, error) {
+	const qAll = `SELECT COUNT(*) FROM (SELECT 1 FROM packages GROUP BY ecosystem, name) s`
+	const qEco = `SELECT COUNT(*) FROM (SELECT 1 FROM packages WHERE ecosystem = $1 GROUP BY ecosystem, name) s`
+
+	var n int
+	var err error
+	if ecosystem == "" {
+		err = db.QueryRowContext(ctx, qAll).Scan(&n)
+	} else {
+		err = db.QueryRowContext(ctx, qEco, ecosystem).Scan(&n)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("db: count package summaries: %w", err)
+	}
+	return n, nil
+}
+
 // ListPackageSummaries returns one row per unique (ecosystem, name), with the
 // most recently cached version labelled as LatestCached. Optionally filtered
-// by ecosystem.
-func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string) ([]PackageSummary, error) {
+// by ecosystem. Results are paginated using limit and offset.
+func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string, limit, offset int) ([]PackageSummary, error) {
 	const qAll = `
 		SELECT
 			ecosystem,
@@ -164,6 +183,7 @@ func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string) ([]Pac
 		FROM packages p
 		GROUP BY ecosystem, name
 		ORDER BY MAX(cached_at) DESC
+		LIMIT $1 OFFSET $2
 	`
 	const qEco = `
 		SELECT
@@ -182,6 +202,7 @@ func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string) ([]Pac
 		WHERE ecosystem = $1
 		GROUP BY ecosystem, name
 		ORDER BY MAX(cached_at) DESC
+		LIMIT $2 OFFSET $3
 	`
 
 	var (
@@ -189,9 +210,9 @@ func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string) ([]Pac
 		err  error
 	)
 	if ecosystem == "" {
-		rows, err = db.QueryContext(ctx, qAll)
+		rows, err = db.QueryContext(ctx, qAll, limit, offset)
 	} else {
-		rows, err = db.QueryContext(ctx, qEco, ecosystem)
+		rows, err = db.QueryContext(ctx, qEco, ecosystem, limit, offset)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("db: list package summaries: %w", err)
@@ -216,6 +237,16 @@ func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string) ([]Pac
 	}
 
 	return summaries, rows.Err()
+}
+
+// CountVersions returns the total number of cached versions for a package.
+func (db *DB) CountVersions(ctx context.Context, ecosystem, name string) (int, error) {
+	const q = `SELECT COUNT(*) FROM packages WHERE ecosystem = $1 AND name = $2`
+	var n int
+	if err := db.QueryRowContext(ctx, q, ecosystem, name).Scan(&n); err != nil {
+		return 0, fmt.Errorf("db: count versions: %w", err)
+	}
+	return n, nil
 }
 
 // ListPackages returns all cached packages ordered by most recently cached.
