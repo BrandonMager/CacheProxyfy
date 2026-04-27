@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	resp, err := http.Get("http://localhost:9090/healthz")
+	resp, err := http.Get("http://localhost:8080/healthz")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		os.Exit(1)
 	}
