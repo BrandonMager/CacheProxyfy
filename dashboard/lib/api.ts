@@ -44,6 +44,17 @@ export function listVersions(
   return apiFetch<Package[]>(`/api/packages?${params}`);
 }
 
+// GET /api/packages/cve-alerts?ecosystem=&name=&version=
+// Returns all CVE alerts ever recorded for a specific package version.
+export function listPackageCVEAlerts(
+  ecosystem: string,
+  name: string,
+  version: string
+): Promise<CVEAlert[]> {
+  const params = new URLSearchParams({ ecosystem, name, version });
+  return apiFetch<CVEAlert[]>(`/api/packages/cve-alerts?${params}`);
+}
+
 // GET /api/config
 export function getConfig(): Promise<ConfigResponse> {
   return apiFetch<ConfigResponse>("/api/config");
