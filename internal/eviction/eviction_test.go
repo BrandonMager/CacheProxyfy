@@ -286,12 +286,12 @@ func TestRun_ZeroTTL_WarnsAndNeverTicks(t *testing.T) {
 func TestRun_ZeroInterval_DefaultsTo1h(t *testing.T) {
 	logger, buf := logBuffer()
 
-	var listCalled bool
+	var callCount int
 
 	w := New(
 		&mockDB{
 			listExpiredFunc: func(_ context.Context, _ time.Time) ([]db.Package, error) {
-				listCalled = true
+				callCount++
 				return nil, nil
 			},
 		},
@@ -310,8 +310,10 @@ func TestRun_ZeroInterval_DefaultsTo1h(t *testing.T) {
 	if !strings.Contains(buf.String(), "defaulting to 1h") {
 		t.Errorf("expected warning log 'defaulting to 1h', got:\n%s", buf.String())
 	}
-	if listCalled {
-		t.Error("ListExpiredPackages should not have been called within 50ms of a 1h ticker")
+	// The startup cycle fires once immediately; the 1h ticker must not fire a
+	// second call within 50ms.
+	if callCount != 1 {
+		t.Errorf("expected exactly 1 call (startup cycle), got %d", callCount)
 	}
 }
 
