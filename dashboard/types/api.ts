@@ -20,6 +20,16 @@ export interface CVEAlert {
   recorded_at: string;
 }
 
+export interface PackageSummary {
+  ecosystem: string;
+  name: string;
+  latest_version: string;
+  version_count: number;
+  total_size_bytes: number;
+  last_cached_at: string;
+  last_hit_at: string | null;
+}
+
 export interface Stats {
   total_packages: number;
   total_hits: number;

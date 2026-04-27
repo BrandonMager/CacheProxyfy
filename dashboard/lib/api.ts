@@ -1,4 +1,4 @@
-import type { CVEAlert, ConfigResponse, Package, Stats } from "@/types/api";
+import type { CVEAlert, ConfigResponse, Package, PackageSummary, Stats } from "@/types/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:9090";
 
@@ -15,6 +15,13 @@ async function apiFetch<T>(path: string): Promise<T> {
 export function getStats(since?: string): Promise<Stats> {
   const params = since ? `?since=${encodeURIComponent(since)}` : "";
   return apiFetch<Stats>(`/api/stats${params}`);
+}
+
+// GET /api/packages/summaries[?ecosystem=<eco>]
+// Returns one row per unique (ecosystem, name) with the latest cached version.
+export function listPackageSummaries(ecosystem?: string): Promise<PackageSummary[]> {
+  const params = ecosystem ? `?ecosystem=${encodeURIComponent(ecosystem)}` : "";
+  return apiFetch<PackageSummary[]>(`/api/packages/summaries${params}`);
 }
 
 // GET /api/packages/list[?ecosystem=<eco>]

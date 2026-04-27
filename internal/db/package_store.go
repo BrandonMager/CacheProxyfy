@@ -132,6 +132,92 @@ func (db *DB) ListVersions(ctx context.Context, ecosystem, name string) ([]Packa
 	return pkgs, rows.Err()
 }
 
+// PackageSummary represents one unique (ecosystem, name) pair, aggregated
+// across all cached versions.
+type PackageSummary struct {
+	Ecosystem      string     `json:"ecosystem"`
+	Name           string     `json:"name"`
+	LatestVersion  string     `json:"latest_version"`
+	VersionCount   int        `json:"version_count"`
+	TotalSizeBytes int64      `json:"total_size_bytes"`
+	LastCachedAt   time.Time  `json:"last_cached_at"`
+	LastHitAt      *time.Time `json:"last_hit_at"`
+}
+
+// ListPackageSummaries returns one row per unique (ecosystem, name), with the
+// most recently cached version labelled as LatestCached. Optionally filtered
+// by ecosystem.
+func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string) ([]PackageSummary, error) {
+	const qAll = `
+		SELECT
+			ecosystem,
+			name,
+			(
+				SELECT version FROM packages p2
+				WHERE p2.ecosystem = p.ecosystem AND p2.name = p.name
+				ORDER BY cached_at DESC LIMIT 1
+			) AS latest_version,
+			COUNT(*)           AS version_count,
+			SUM(size_bytes)    AS total_size_bytes,
+			MAX(cached_at)     AS last_cached_at,
+			MAX(last_hit_at)   AS last_hit_at
+		FROM packages p
+		GROUP BY ecosystem, name
+		ORDER BY MAX(cached_at) DESC
+	`
+	const qEco = `
+		SELECT
+			ecosystem,
+			name,
+			(
+				SELECT version FROM packages p2
+				WHERE p2.ecosystem = p.ecosystem AND p2.name = p.name
+				ORDER BY cached_at DESC LIMIT 1
+			) AS latest_version,
+			COUNT(*)           AS version_count,
+			SUM(size_bytes)    AS total_size_bytes,
+			MAX(cached_at)     AS last_cached_at,
+			MAX(last_hit_at)   AS last_hit_at
+		FROM packages p
+		WHERE ecosystem = $1
+		GROUP BY ecosystem, name
+		ORDER BY MAX(cached_at) DESC
+	`
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if ecosystem == "" {
+		rows, err = db.QueryContext(ctx, qAll)
+	} else {
+		rows, err = db.QueryContext(ctx, qEco, ecosystem)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: list package summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []PackageSummary
+	for rows.Next() {
+		var s PackageSummary
+		if err := rows.Scan(
+			&s.Ecosystem,
+			&s.Name,
+			&s.LatestVersion,
+			&s.VersionCount,
+			&s.TotalSizeBytes,
+			&s.LastCachedAt,
+			&s.LastHitAt,
+		); err != nil {
+			return nil, fmt.Errorf("db: list package summaries scan: %w", err)
+		}
+		summaries = append(summaries, s)
+	}
+
+	return summaries, rows.Err()
+}
+
 // ListPackages returns all cached packages ordered by most recently cached.
 // If ecosystem is non-empty, results are filtered to that ecosystem.
 func (db *DB) ListPackages(ctx context.Context, ecosystem string) ([]Package, error) {
