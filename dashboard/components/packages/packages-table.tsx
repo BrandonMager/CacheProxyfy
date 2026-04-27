@@ -1,19 +1,19 @@
 "use client"
 
 import { useState } from "react";
-import type { Package } from "@/types/api";
+import type { PackageSummary } from "@/types/api";
 import { EcosystemTabs, type EcosystemTab } from "./ecosystem-tabs";
 import { PackageRow } from "./package-row";
 
-const COLUMNS = ["Ecosystem", "Name", "Version", "Size", "Cached", "Last Hit"];
+const COLUMNS = ["Ecosystem", "Name", "Latest Cached", "Versions", "Total Size", "Last Cached", "Last Hit"];
 
-export const PackagesTable = ({ packages }: { packages: Package[] }) => {
+export const PackagesTable = ({ summaries }: { summaries: PackageSummary[] }) => {
   const [activeTab, setActiveTab] = useState<EcosystemTab>("All");
 
   const filtered =
     activeTab === "All"
-      ? packages
-      : packages.filter((p) => p.ecosystem === activeTab);
+      ? summaries
+      : summaries.filter((s) => s.ecosystem === activeTab);
 
   return (
     <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm">
@@ -29,12 +29,12 @@ export const PackagesTable = ({ packages }: { packages: Package[] }) => {
         <EcosystemTabs active={activeTab} onChange={setActiveTab} />
       </div>
 
-      <div className="grid grid-cols-[90px_1fr_140px_90px_120px_120px] gap-4 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 rounded-t-none">
+      <div className="grid grid-cols-[90px_1fr_160px_60px_100px_120px_120px] gap-4 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 rounded-t-none">
         {COLUMNS.map((col) => (
           <span
             key={col}
             className={`text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide ${
-              col === "Ecosystem" ? "text-center" : ""
+              col === "Ecosystem" || col === "Versions" ? "text-center" : ""
             }`}
           >
             {col}
@@ -48,7 +48,9 @@ export const PackagesTable = ({ packages }: { packages: Package[] }) => {
             No packages found.
           </p>
         ) : (
-          filtered.map((pkg) => <PackageRow key={pkg.id} pkg={pkg} />)
+          filtered.map((s) => (
+            <PackageRow key={`${s.ecosystem}:${s.name}`} summary={s} />
+          ))
         )}
       </div>
     </div>
