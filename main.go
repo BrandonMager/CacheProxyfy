@@ -14,6 +14,7 @@ import (
 	"github.com/BrandonMager/CacheProxyfy/internal/cache"
 	"github.com/BrandonMager/CacheProxyfy/internal/config"
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
+	"github.com/BrandonMager/CacheProxyfy/internal/eviction"
 	"github.com/BrandonMager/CacheProxyfy/internal/metrics"
 	"github.com/BrandonMager/CacheProxyfy/internal/proxy"
 	"github.com/BrandonMager/CacheProxyfy/internal/security"
@@ -90,6 +91,25 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("running migrations: %w", err)
 	}
 	logger.Info("database ready", "host", cfg.Database.Host)
+
+	evictionWorker := eviction.New(
+		database,
+		redisClient,
+		store,
+		time.Duration(cfg.Cache.TTLHours)*time.Hour,
+		time.Duration(cfg.Cache.EvictionIntervalHours)*time.Hour,
+		logger,
+	)
+	evictionCtx, evictionCancel := context.WithCancel(context.Background())
+	defer evictionCancel()
+	go func() {
+		logger.Info("eviction worker started",
+			"ttl_hours", cfg.Cache.TTLHours,
+			"interval_hours", cfg.Cache.EvictionIntervalHours,
+		)
+		evictionWorker.Run(evictionCtx)
+		logger.Info("eviction worker stopped")
+	}()
 
 	checker := security.NewChecker(cfg.Security.CVEScanning, cfg.Security.BlockSeverity, cfg.Security.WarnSeverity)
 
