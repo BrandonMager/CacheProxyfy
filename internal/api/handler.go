@@ -18,6 +18,7 @@ type DBClient interface {
 	GetPackage(ctx context.Context, ecosystem, name, version string) (db.Package, error)
 	ListVersions(ctx context.Context, ecosystem, name string) ([]db.Package, error)
 	ListPackages(ctx context.Context, ecosystem string) ([]db.Package, error)
+	ListPackageSummaries(ctx context.Context, ecosystem string) ([]db.PackageSummary, error)
 	ListCVEAlerts(ctx context.Context, since time.Time, ecosystem string) ([]db.CVEAlert, error)
 	ListPackageCVEAlerts(ctx context.Context, ecosystem, name, version string) ([]db.CVEAlert, error)
 }
@@ -37,6 +38,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stats", h.handleStats)
 	mux.HandleFunc("/api/packages", h.handlePackages)
 	mux.HandleFunc("/api/packages/list", h.handlePackageList)
+	mux.HandleFunc("/api/packages/summaries", h.handlePackageSummaries)
 	mux.HandleFunc("/api/packages/cve-alerts", h.handlePackageCVEAlerts)
 	mux.HandleFunc("/api/cve-alerts", h.handleCVEAlerts)
 	mux.HandleFunc("/api/config", h.handleConfig)
@@ -133,6 +135,29 @@ func (h *Handler) handlePackageList(w http.ResponseWriter, r *http.Request) {
 		pkgs = []db.Package{}
 	}
 	writeJSON(w, pkgs)
+}
+
+// handlePackageSummaries handles GET /api/packages/summaries[?ecosystem=<eco>]
+//
+// Returns one row per unique (ecosystem, name) with the latest cached version,
+// total version count, total size, and last hit time.
+func (h *Handler) handlePackageSummaries(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ecosystem := r.URL.Query().Get("ecosystem")
+
+	summaries, err := h.db.ListPackageSummaries(r.Context(), ecosystem)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if summaries == nil {
+		summaries = []db.PackageSummary{}
+	}
+	writeJSON(w, summaries)
 }
 
 // handlePackageCVEAlerts handles GET /api/packages/cve-alerts?ecosystem=&name=&version=
