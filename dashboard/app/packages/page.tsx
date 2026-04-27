@@ -1,5 +1,6 @@
 import { SidebarLayout } from "@/components/layout/sidebar-layout";
 import { PackagesTable } from "@/components/packages/packages-table";
+import { type EcosystemTab } from "@/components/packages/ecosystem-tabs";
 import { listPackageSummaries } from "@/lib/api";
 
 const PAGE_SIZE = 25;
@@ -11,8 +12,10 @@ export default async function PackagesPage({
 }) {
   const sp = await searchParams;
   const page = Math.max(1, Number(sp.page) || 1);
+  const ecosystem = typeof sp.ecosystem === "string" ? sp.ecosystem : undefined;
+  const activeEcosystem = (ecosystem ?? "All") as EcosystemTab;
 
-  const result = await listPackageSummaries(undefined, page, PAGE_SIZE).catch(() => ({
+  const result = await listPackageSummaries(ecosystem, page, PAGE_SIZE).catch(() => ({
     items: [],
     total: 0,
     page,
@@ -29,6 +32,7 @@ export default async function PackagesPage({
         total={result.total}
         page={result.page}
         pageSize={result.page_size}
+        activeEcosystem={activeEcosystem}
       />
     </SidebarLayout>
   );
