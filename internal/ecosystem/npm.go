@@ -13,6 +13,11 @@ var npmTarball = regexp.MustCompile(
 	`^/npm/(@[^/]+/[^/]+|[^@/][^/]*)/-/([^/]+\.tgz)$`,
 )
 
+// npmManifest matches GET /npm/<name> and GET /npm/@scope/name (no trailing slash path segments beyond the name).
+var npmManifest = regexp.MustCompile(
+	`^/npm/(@[^/]+/[^/]+|[^@/][^/]*)$`,
+)
+
 type NPM struct {
 	UpstreamBase string
 }
@@ -46,6 +51,28 @@ func (n *NPM) UpstreamURL(pkg *Package) string {
 
 func (n *NPM) RewriteResponse(_ context.Context, body []byte, _ *Package) ([]byte, error){
 	return body, nil
+}
+
+// IsMetadataRequest reports whether r is an npm manifest request (package metadata JSON).
+func (n *NPM) IsMetadataRequest(r *http.Request) bool {
+	return npmManifest.MatchString(r.URL.Path)
+}
+
+// MetadataUpstreamURL returns the upstream registry URL for the manifest request.
+func (n *NPM) MetadataUpstreamURL(r *http.Request) string {
+	name := strings.TrimPrefix(r.URL.Path, "/npm/")
+	return n.UpstreamBase + "/" + name
+}
+
+// RewriteMetadata replaces registry.npmjs.org tarball URLs with proxy URLs
+// so npm fetches tarballs through the proxy instead of directly.
+func (n *NPM) RewriteMetadata(body []byte, proxyBase string) ([]byte, error) {
+	rewritten := strings.ReplaceAll(
+		string(body),
+		n.UpstreamBase,
+		proxyBase+"/npm",
+	)
+	return []byte(rewritten), nil
 }
 
 func extractNPMVersion(name, filename string) string {
