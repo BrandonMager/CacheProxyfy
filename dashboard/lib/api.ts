@@ -1,9 +1,14 @@
 import type { CVEAlert, ConfigResponse, Package, PackageSummary, PaginatedResponse, Stats } from "@/types/api";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:9090";
+// API_URL is a server-only runtime env var (set via ConfigMap in k8s or .env.local locally).
+// Falls back to NEXT_PUBLIC_API_URL for backward compatibility, then localhost for local dev.
+const API_BASE =
+  process.env.API_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://localhost:9090";
 
 async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`API error ${res.status}: ${path}`);
   }
