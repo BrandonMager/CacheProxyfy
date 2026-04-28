@@ -12,11 +12,11 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=linux \
     go build -trimpath -ldflags="-s -w" \
     -o /out/cacheproxyfy ./main.go
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=linux \
     go build -trimpath -ldflags="-s -w" \
     -o /out/healthcheck ./cmd/healthcheck/main.go
 
@@ -30,7 +30,6 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /out/cacheproxyfy /cacheproxyfy
 COPY --from=builder /out/healthcheck /healthcheck
 COPY --from=builder /app/data/artifacts /app/data/artifacts
-COPY --from=builder /src/cacheproxyfy.yaml /app/cacheproxyfy.yaml
 
 WORKDIR /app
 
