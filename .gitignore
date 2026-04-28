@@ -1,5 +1,6 @@
 cacheproxyfy
-dist/ 
+cacheproxyfy.yaml
+dist/
 .claude/
 
 coverage.out
