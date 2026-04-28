@@ -24,8 +24,8 @@ spec:
       containers:
         - name: proxy
           # Replace with your registry image after pushing: e.g. ghcr.io/youruser/cacheproxyfy-proxy:latest
-          image: cacheproxyfy-proxy:latest
-          imagePullPolicy: IfNotPresent
+          image: ${DOCKER_USERNAME}/cacheproxyfy-proxy:latest
+          imagePullPolicy: Always
           ports:
             - name: proxy
               containerPort: 8080
