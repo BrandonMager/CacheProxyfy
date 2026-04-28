@@ -26,5 +26,7 @@ deploy/terraform/*.tfstate.backup
 deploy/terraform/.terraform/
 deploy/terraform/.terraform.lock.hcl
 
+deploy/k8s/02-secret.yaml
+
 *.tmp
 *.bak
