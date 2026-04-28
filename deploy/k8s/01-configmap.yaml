@@ -5,6 +5,7 @@ metadata:
   namespace: cacheproxyfy
 data:
   CACHEPROXYFY_PROXY_PORT: "8080"
+  CACHEPROXYFY_PROXY_ECOSYSTEMS: "npm,pypi,maven"
 
   CACHEPROXYFY_DATABASE_HOST: postgres
   CACHEPROXYFY_DATABASE_PORT: "5432"
