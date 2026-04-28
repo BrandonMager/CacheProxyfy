@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy
+  namespace: cacheproxyfy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proxy
+  template:
+    metadata:
+      labels:
+        app: proxy
+    spec:
+      initContainers:
+        # Wait for Postgres and Redis to be ready before starting the proxy.
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
+        - name: wait-for-redis
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z redis 6379; do echo waiting for redis; sleep 2; done"]
+      containers:
+        - name: proxy
+          # Replace with your registry image after pushing: e.g. ghcr.io/youruser/cacheproxyfy-proxy:latest
+          image: cacheproxyfy-proxy:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: proxy
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: cacheproxyfy-config
+          env:
+            - name: CACHEPROXYFY_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cacheproxyfy-secret
+                  key: CACHEPROXYFY_DATABASE_PASSWORD
+            - name: CACHEPROXYFY_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cacheproxyfy-secret
+                  key: CACHEPROXYFY_REDIS_PASSWORD
+          volumeMounts:
+            - name: artifacts
+              mountPath: /app/data/artifacts
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: artifacts
