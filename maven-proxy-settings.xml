@@ -1,0 +1,9 @@
+<settings>                                                                                                                                                  
+    <mirrors>
+      <mirror>                                                                                                                                                
+        <id>cacheproxyfy</id>                                                                                                                               
+        <mirrorOf>central</mirrorOf>                                                                                                                        
+        <url>http://127.0.0.1:8080/maven</url>                                                                                                                
+      </mirror>
+    </mirrors>                                                                                                                                                
+ </settings>
