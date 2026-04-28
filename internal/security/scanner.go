@@ -49,6 +49,19 @@ type osvVuln struct {
 	DBSpecific map[string]any `json:"database_specific"`
 }
 
+// canonicalVersion strips wheel/artifact tags from a version string so OSV
+// receives a plain PEP 440 version. For a PyPI wheel like "2.33.1-py3-none-any"
+// the part after the first "-" is the python/abi/platform tag, not the version.
+// PEP 440 versions never contain "-", so the first segment is always correct.
+func canonicalVersion(ecosystem, version string) string {
+	if strings.ToLower(ecosystem) == "pypi" {
+		if idx := strings.Index(version, "-"); idx != -1 {
+			return version[:idx]
+		}
+	}
+	return version
+}
+
 // Scan queries the OSV API and returns CVE records for the given package.
 func (s *Scanner) Scan(ctx context.Context, ecosystem, name, version string) ([]CVERecord, error) {
 	osvEco, ok := ecosystemMap[strings.ToLower(ecosystem)]
@@ -58,7 +71,7 @@ func (s *Scanner) Scan(ctx context.Context, ecosystem, name, version string) ([]
 
 	body, err := json.Marshal(osvRequest{
 		Package: osvPackage{Name: name, Ecosystem: osvEco},
-		Version: version,
+		Version: canonicalVersion(ecosystem, version),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("security: marshal osv request: %w", err)
