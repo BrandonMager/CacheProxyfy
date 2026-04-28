@@ -20,10 +20,9 @@ spec:
       containers:
         - name: dashboard
           # Replace with your registry image after pushing: e.g. ghcr.io/youruser/cacheproxyfy-dashboard:latest
-          # Note: NEXT_PUBLIC_API_URL is baked into the image at build time.
-          # Rebuild the image with the correct API URL for your cluster before pushing.
-          image: cacheproxyfy-dashboard:latest
-          imagePullPolicy: IfNotPresent
+          # API_URL is a server-only runtime env var — no image rebuild needed when changing the proxy address.
+          image: ${DOCKER_USERNAME}/cacheproxyfy-dashboard:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
           env:
@@ -33,6 +32,8 @@ spec:
               value: "3000"
             - name: HOSTNAME
               value: "0.0.0.0"
+            - name: API_URL
+              value: "http://proxy:9090"
           readinessProbe:
             httpGet:
               path: /
