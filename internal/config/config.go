@@ -74,6 +74,7 @@ func Load() (*Config, error) {
 	v.AutomaticEnv()
 
 	v.SetDefault("proxy.port", 8080)
+	v.SetDefault("proxy.ecosystems", []string{})
 	v.SetDefault("cache.backend", "local")
 	v.SetDefault("cache.local_dir", "./data/artifacts")
 	v.SetDefault("cache.ttl_hours", 720)
@@ -85,7 +86,9 @@ func Load() (*Config, error) {
 
 	v.SetDefault("database.host", "localhost")
 	v.SetDefault("database.port", 5432)
-	//v.SetDefault("database.dbname", "cacheproxyfy")
+	v.SetDefault("database.user", "postgres")
+	v.SetDefault("database.password", "")
+	v.SetDefault("database.dbname", "postgres")
 	v.SetDefault("database.sslmode", "disable")
 
 	v.SetDefault("cache.eviction_interval_hours", 1)
