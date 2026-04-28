@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: cacheproxyfy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      initContainers:
+        - name: wait-for-proxy
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z proxy 9090; do echo waiting for proxy api; sleep 2; done"]
+      containers:
+        - name: dashboard
+          # Replace with your registry image after pushing: e.g. ghcr.io/youruser/cacheproxyfy-dashboard:latest
+          # Note: NEXT_PUBLIC_API_URL is baked into the image at build time.
+          # Rebuild the image with the correct API URL for your cluster before pushing.
+          image: cacheproxyfy-dashboard:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
