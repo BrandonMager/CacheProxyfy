@@ -20,7 +20,7 @@ func startRedis(t *testing.T) string {
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "redis:7-alpine",
 			ExposedPorts: []string{"6379/tcp"},
-			WaitingFor:   wait.ForListeningPort("6379/tcp"),
+			WaitingFor:   wait.ForLog("Ready to accept connections"),
 		},
 		Started: true,
 	})

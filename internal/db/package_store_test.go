@@ -410,7 +410,7 @@ func TestPackageStore_Integration(t *testing.T) {
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("user"),
 		postgres.WithPassword("pass"),
-		testcontainers.WithWaitStrategy(wait.ForListeningPort("5432/tcp")),
+		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").WithOccurrence(2)),
 	)
 	if err != nil {
 		t.Fatalf("failed to start postgres container: %v", err)
