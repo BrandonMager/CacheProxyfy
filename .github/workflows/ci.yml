@@ -105,7 +105,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build proxy Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -113,7 +113,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build dashboard Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./dashboard
           push: false
