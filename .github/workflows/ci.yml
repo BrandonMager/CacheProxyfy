@@ -102,7 +102,7 @@ jobs:
         run: go build -trimpath -ldflags="-s -w" -o /dev/null ./cmd/healthcheck
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build proxy Docker image
         uses: docker/build-push-action@v7
