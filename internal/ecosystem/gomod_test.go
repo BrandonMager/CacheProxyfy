@@ -213,7 +213,7 @@ func TestDecodeCaseEncoding(t *testing.T) {
 		{"github.com/gin-gonic/gin", "github.com/gin-gonic/gin"},
 		{"github.com/!burnt!sushi/toml", "github.com/BurntSushi/toml"},
 		{"github.com/!azure/azure-sdk-for-go", "github.com/Azure/azure-sdk-for-go"},
-		{"github.com/!p-a-u-l-f/foo", "github.com/Paul-F/foo"},
+		{"github.com/!paul-!f/foo", "github.com/Paul-F/foo"},
 	}
 
 	for _, tc := range cases {
