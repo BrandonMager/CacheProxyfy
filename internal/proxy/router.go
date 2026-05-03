@@ -14,6 +14,7 @@ func NewRouter(enabledEcosystems[] string) *Router {
 		"npm":   ecosystem.NewNPM(),
 		"pypi":  ecosystem.NewPyPI(),
 		"maven": ecosystem.NewMaven(),
+		"go":    ecosystem.NewGoMod(),
 	}
 
 	enabled := make(map[string]bool, len(enabledEcosystems))
