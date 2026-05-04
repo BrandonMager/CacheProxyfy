@@ -148,6 +148,12 @@ func (s *Scanner) Scan(ctx context.Context, ecosystem, name, version string) ([]
 				}
 			}
 		}
+		// GO-* entries from the Go vulnerability database are duplicates of their
+		// GHSA aliases, which appear in the same response with proper severity data.
+		// Skip them to avoid redundant Unknown-severity records.
+		if sev == SeverityUnknown && strings.HasPrefix(v.ID, "GO-") {
+			continue
+		}
 		records = append(records, CVERecord{
 			ID:       v.ID,
 			Summary:  v.Summary,
