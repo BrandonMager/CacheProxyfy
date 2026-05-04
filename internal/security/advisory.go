@@ -34,7 +34,7 @@ func ParseSeverity(s string) Severity {
 		return SeverityCritical
 	case "HIGH":
 		return SeverityHigh
-	case "MEDIUM":
+	case "MEDIUM", "MODERATE":
 		return SeverityMedium
 	case "LOW":
 		return SeverityLow
