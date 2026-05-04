@@ -136,6 +136,9 @@ func (s *Scanner) Scan(ctx context.Context, ecosystem, name, version string) ([]
 	for _, v := range result.Vulns {
 		sev := SeverityUnknown
 		if s, ok := v.DBSpecific["severity"].(string); ok {
+			if strings.ToUpper(s) == "NONE" {
+				continue
+			}
 			sev = ParseSeverity(s)
 		} else {
 			for _, sv := range v.Severity {
