@@ -17,6 +17,7 @@ var ecosystemMap = map[string]string{
 	"npm":   "npm",
 	"pypi":  "PyPI",
 	"maven": "Maven",
+	"go":    "Go",
 }
 
 type Scanner struct {
@@ -43,10 +44,16 @@ type osvResponse struct {
 	Vulns []osvVuln `json:"vulns"`
 }
 
+type osvSeverity struct {
+	Type  string `json:"type"`
+	Score string `json:"score"`
+}
+
 type osvVuln struct {
 	ID         string         `json:"id"`
 	Summary    string         `json:"summary"`
 	DBSpecific map[string]any `json:"database_specific"`
+	Severity   []osvSeverity  `json:"severity"`
 }
 
 // canonicalVersion strips wheel/artifact tags from a version string so OSV
@@ -60,6 +67,33 @@ func canonicalVersion(ecosystem, version string) string {
 		}
 	}
 	return version
+}
+
+// severityFromCVSSVector derives a severity level from a CVSS v3 vector string by
+// examining the Confidentiality (C), Integrity (I), and Availability (A) impact
+// components. The Go vulnerability database reports severity as CVSS vectors rather
+// than plain severity strings, so this fallback is required to trigger alerts.
+func severityFromCVSSVector(vector string) Severity {
+	highCount := 0
+	lowCount := 0
+	for _, part := range strings.Split(vector, "/") {
+		switch part {
+		case "C:H", "I:H", "A:H":
+			highCount++
+		case "C:L", "I:L", "A:L":
+			lowCount++
+		}
+	}
+	switch {
+	case highCount >= 2:
+		return SeverityCritical
+	case highCount == 1:
+		return SeverityHigh
+	case lowCount > 0:
+		return SeverityMedium
+	default:
+		return SeverityLow
+	}
 }
 
 // Scan queries the OSV API and returns CVE records for the given package.
@@ -103,6 +137,13 @@ func (s *Scanner) Scan(ctx context.Context, ecosystem, name, version string) ([]
 		sev := SeverityUnknown
 		if s, ok := v.DBSpecific["severity"].(string); ok {
 			sev = ParseSeverity(s)
+		} else {
+			for _, sv := range v.Severity {
+				if strings.HasPrefix(sv.Type, "CVSS") {
+					sev = severityFromCVSSVector(sv.Score)
+					break
+				}
+			}
 		}
 		records = append(records, CVERecord{
 			ID:       v.ID,

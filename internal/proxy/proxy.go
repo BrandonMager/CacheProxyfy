@@ -202,16 +202,20 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 	}
 	if shared {
 		checksum := pkg.CacheKey()
-		p.storage.Put(ctx, checksum, bytes.NewReader(data), int64(len(data)))
+		if err := p.storage.Put(ctx, checksum, bytes.NewReader(data), int64(len(data))); err != nil {
+			p.logger.Warn("storage put failed", "package", pkg.Name, "error", err)
+		}
 		go func() {
 			p.cache.Set(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, checksum)
-			p.db.UpsertPackage(context.Background(), db.Package{
+			if _, err := p.db.UpsertPackage(context.Background(), db.Package{
 				Ecosystem: pkg.Ecosystem,
 				Name:      pkg.Name,
 				Version:   pkg.Version,
 				Checksum:  checksum,
 				SizeBytes: int64(len(data)),
-			})
+			}); err != nil {
+				p.logger.Warn("upsert package failed", "package", pkg.Name, "error", err)
+			}
 
 			p.recordEvent(pkg, "miss", int64(len(data)))
 		}()

@@ -1275,3 +1275,28 @@ func TestServeHTTP_PyPISimpleIndex(t *testing.T) {
 		t.Errorf("body mismatch:\ngot:  %s\nwant: %s", body, wantHTML)
 	}
 }
+
+func TestServeHTTP_GoEcosystemDisabled_Returns404(t *testing.T) {
+	// Router built without "go" — all /go/... paths should return 404.
+	router := NewRouter([]string{"npm", "pypi", "maven"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := metrics.New(prometheus.NewRegistry(), []string{})
+	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m)
+
+	paths := []string{
+		"/go/golang.org/x/net/@v/v0.17.0.zip",
+		"/go/github.com/gin-gonic/gin/@v/v1.9.1.zip",
+		"/go/golang.org/x/net/@v/list",
+		"/go/golang.org/x/net/@latest",
+	}
+
+	for _, path := range paths {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		p.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("path %q: expected 404, got %d", path, w.Code)
+		}
+	}
+}
