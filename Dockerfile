@@ -29,7 +29,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /out/cacheproxyfy /cacheproxyfy
 COPY --from=builder /out/healthcheck /healthcheck
-COPY --from=builder /app/data/artifacts /app/data/artifacts
+COPY --from=builder --chown=nonroot:nonroot /app/data/artifacts /app/data/artifacts
 
 WORKDIR /app
 
