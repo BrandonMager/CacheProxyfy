@@ -76,9 +76,23 @@ services:
     volumes:
       - ./cacheproxyfy.yaml:/app/cacheproxyfy.yaml:ro
       - artifacts:/app/data/artifacts
+    # No public ports — all external traffic enters through nginx.
+    # Port 9090 (metrics/API) remains internal-only and is never proxied.
+    networks:
+      - internal
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      proxy:
+        condition: service_healthy
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
     ports:
-      - "8080:8080"
-      - "9090:9090"
+      - "80:80"
+      - "443:443"
     networks:
       - internal
       - external
