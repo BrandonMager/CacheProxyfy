@@ -13,7 +13,18 @@ type Config struct {
 	Redis    RedisConfig    `mapstructure:"redis"`
 	Database DatabaseConfig `mapstructure:"database"`
 	Security SecurityConfig `mapstructure:"security"`
-	Log LogConfig `mapstructure:"log"`
+	Auth     AuthConfig     `mapstructure:"auth"`
+	Log      LogConfig      `mapstructure:"log"`
+}
+
+type AuthConfig struct {
+	Enabled bool         `mapstructure:"enabled"`
+	Users   []UserConfig `mapstructure:"users"`
+}
+
+type UserConfig struct {
+	Username     string `mapstructure:"username"`
+	PasswordHash string `mapstructure:"password_hash"`
 }
 
 type ProxyConfig struct {
@@ -96,6 +107,8 @@ func Load() (*Config, error) {
 	v.SetDefault("security.cve_scanning", false)
 	v.SetDefault("security.block_severity", "CRITICAL")
 	v.SetDefault("security.warn_severity", "HIGH")
+	v.SetDefault("auth.enabled", false)
+
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 

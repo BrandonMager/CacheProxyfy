@@ -68,7 +68,13 @@ services:
       CACHEPROXYFY_SECURITY_CVE_SCANNING: "true"
       CACHEPROXYFY_SECURITY_BLOCK_SEVERITY: CRITICAL
       CACHEPROXYFY_SECURITY_WARN_SEVERITY: HIGH
+
+      # Authentication — configure users via cacheproxyfy.yaml (auth.users)
+      # because Viper does not support slice-of-structs via env vars.
+      # Set this to "true" once users are defined in the config file.
+      CACHEPROXYFY_AUTH_ENABLED: "true"
     volumes:
+      - ./cacheproxyfy.yaml:/app/cacheproxyfy.yaml:ro
       - artifacts:/app/data/artifacts
     ports:
       - "8080:8080"
