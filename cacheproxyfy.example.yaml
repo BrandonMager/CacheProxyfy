@@ -36,3 +36,12 @@ security:
   cve_scanning: true
   block_severity: CRITICAL
   warn_severity: HIGH
+
+auth:
+  enabled: false
+  users:
+    # Generate a bcrypt hash for a password with either of these commands:
+    #   htpasswd -bnBC 12 "" yourpassword | tr -d ':\n'
+    #   docker run --rm httpd:alpine htpasswd -bnBC 12 "" yourpassword | tr -d ':\n'
+    # - username: alice
+    #   password_hash: "$2y$12$..."
