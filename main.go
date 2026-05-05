@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BrandonMager/CacheProxyfy/internal/api"
+	"github.com/BrandonMager/CacheProxyfy/internal/auth"
 	"github.com/BrandonMager/CacheProxyfy/internal/cache"
 	"github.com/BrandonMager/CacheProxyfy/internal/config"
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
@@ -113,6 +114,15 @@ func run(logger *slog.Logger) error {
 
 	checker := security.NewChecker(cfg.Security.CVEScanning, cfg.Security.BlockSeverity, cfg.Security.WarnSeverity)
 
+	authUsers := make([]auth.User, len(cfg.Auth.Users))
+	for i, u := range cfg.Auth.Users {
+		authUsers[i] = auth.User{Username: u.Username, PasswordHash: u.PasswordHash}
+	}
+	authMw := auth.New(auth.Config{Enabled: cfg.Auth.Enabled, Users: authUsers})
+	if cfg.Auth.Enabled {
+		logger.Info("authentication enabled", "users", len(cfg.Auth.Users))
+	}
+
 	router := proxy.NewRouter(cfg.Proxy.Ecosystems)
 	p := proxy.New(router, store, logger, redisClient, database, checker, m)
 
@@ -126,14 +136,14 @@ func run(logger *slog.Logger) error {
 
 	metricsSrv := &http.Server{
 		Addr:         ":9090",
-		Handler:      metricsMux,
+		Handler:      authMw.Wrap(metricsMux),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
 	proxySrv := http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Proxy.Port),
-		Handler:      p,
+		Handler:      authMw.Wrap(p),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 10 * time.Minute,
 		IdleTimeout:  60 * time.Second,
