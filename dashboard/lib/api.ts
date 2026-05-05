@@ -7,8 +7,17 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ??
   "http://localhost:9090";
 
+// API_USERNAME / API_PASSWORD are server-only env vars — never NEXT_PUBLIC_ — so they are
+// never bundled into the client JS. Both must be set for auth to be sent.
+const API_CREDENTIALS =
+  process.env.API_USERNAME && process.env.API_PASSWORD
+    ? btoa(`${process.env.API_USERNAME}:${process.env.API_PASSWORD}`)
+    : null;
+
 async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const headers: HeadersInit = {};
+  if (API_CREDENTIALS) headers["Authorization"] = `Basic ${API_CREDENTIALS}`;
+  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store", headers });
   if (!res.ok) {
     throw new Error(`API error ${res.status}: ${path}`);
   }

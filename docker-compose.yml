@@ -80,6 +80,7 @@ services:
     # Port 9090 (metrics/API) remains internal-only and is never proxied.
     networks:
       - internal
+      - external
 
   nginx:
     image: nginx:alpine
@@ -111,6 +112,9 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
+      API_URL: http://proxy:9090
+      API_USERNAME: "${CACHEPROXYFY_DASHBOARD_USER}"
+      API_PASSWORD: "${CACHEPROXYFY_DASHBOARD_PASSWORD}"
     ports:
       - "3000:3000"
     networks:
