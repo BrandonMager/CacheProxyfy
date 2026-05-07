@@ -111,12 +111,14 @@ func (m *mockDB) RecordEvent(_ context.Context, _, _, _, event string, bytes int
 }
 
 type mockStorage struct {
-	getFunc func(ctx context.Context, checksum string) (io.ReadCloser, error)
-	putFunc func(ctx context.Context, checksum string, r io.Reader, size int64) error
+	getFunc   func(ctx context.Context, checksum string) (io.ReadCloser, error)
+	putFunc   func(ctx context.Context, checksum string, r io.Reader, size int64) error
+	getCalled atomic.Bool
 	putCalled atomic.Bool
 }
 
 func (m *mockStorage) Get(ctx context.Context, checksum string) (io.ReadCloser, error) {
+	m.getCalled.Store(true)
 	if m.getFunc != nil {
 		return m.getFunc(ctx, checksum)
 	}
@@ -1007,8 +1009,8 @@ func TestServeHTTP_CVEScanningEnabled_BlockPolicy_RequestRejected(t *testing.T) 
 
 	resp := w.Result()
 
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Errorf("expected status 502, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d", resp.StatusCode)
 	}
 
 	if upstreamCalled {
@@ -1433,5 +1435,47 @@ func TestServeHTTP_GoEcosystemDisabled_Returns404(t *testing.T) {
 		if w.Code != http.StatusNotFound {
 			t.Errorf("path %q: expected 404, got %d", path, w.Code)
 		}
+	}
+}
+
+// TestServeHTTP_PreviouslyBlockedPackage_SkipsStorageAndSecurityScan verifies that
+// when a package is already recorded as blocked in the DB (from a prior request),
+// subsequent requests short-circuit immediately: storage is never accessed and the
+// security scanner is never called. The response must still be 403 Forbidden.
+// The proxy must also emit an info-level log containing "previously blocked".
+func TestServeHTTP_PreviouslyBlockedPackage_SkipsStorageAndSecurityScan(t *testing.T) {
+	checker := &mockSecurityChecker{}
+
+	database := &mockDB{
+		getPackageFunc: func(_ context.Context, _, _, _ string) (db.Package, error) {
+			return db.Package{Status: "blocked"}, nil
+		},
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	store := &mockStorage{}
+	router := NewRouter([]string{"npm"})
+	p := New(router, store, logger, &mockCache{}, database, checker, metrics.New(prometheus.NewRegistry(), []string{}))
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", w.Code)
+	}
+
+	if store.getCalled.Load() {
+		t.Error("storage.Get was called for a previously blocked package — expected no storage access")
+	}
+
+	if checker.checkCalled.Load() {
+		t.Error("security.Check was called for a previously blocked package — expected no OSV scan")
+	}
+
+	if log := logBuf.String(); !strings.Contains(log, "previously blocked") {
+		t.Errorf("expected log line containing %q, got: %s", "previously blocked", log)
 	}
 }
