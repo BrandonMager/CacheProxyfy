@@ -52,15 +52,17 @@ func (m *mockCache) Ping(ctx context.Context) error {
 }
 
 type mockDB struct {
-	getPackageCalled    atomic.Bool
-	getPackageFunc      func(ctx context.Context, ecosystem, name, version string) (db.Package, error)
-	upsertPackageCalled atomic.Bool
-	recordEventCalled   atomic.Bool
-	onRecordEvent       func()                         // called when RecordEvent runs, used to signal goroutine completion
-	onRecordEventArgs   func(event string, bytes int64) // called with the actual arguments for assertion
-	recordCVEAlertCalled atomic.Bool
-	onRecordCVEAlert     func()                                                          // called when RecordCVEAlert runs
-	onRecordCVEAlertArgs func(ecosystem, name, version, cveID, severity, outcome string) // called with the actual arguments for assertion
+	getPackageCalled        atomic.Bool
+	getPackageFunc          func(ctx context.Context, ecosystem, name, version string) (db.Package, error)
+	upsertPackageCalled     atomic.Bool
+	upsertBlockedCalled     atomic.Bool
+	onUpsertBlocked         func()
+	recordEventCalled       atomic.Bool
+	onRecordEvent           func()                         // called when RecordEvent runs, used to signal goroutine completion
+	onRecordEventArgs       func(event string, bytes int64) // called with the actual arguments for assertion
+	recordCVEAlertCalled    atomic.Bool
+	onRecordCVEAlert        func()                                                          // called when RecordCVEAlert runs
+	onRecordCVEAlertArgs    func(ecosystem, name, version, cveID, severity, outcome string) // called with the actual arguments for assertion
 }
 
 func (m *mockDB) GetPackage(ctx context.Context, ecosystem, name, version string) (db.Package, error) {
@@ -76,6 +78,14 @@ func (m *mockDB) TouchPackage(_ context.Context, _, _, _ string) error { return 
 func (m *mockDB) UpsertPackage(_ context.Context, _ db.Package) (string, error) {
 	m.upsertPackageCalled.Store(true)
 	return "", nil
+}
+
+func (m *mockDB) UpsertBlockedPackage(_ context.Context, _, _, _ string) error {
+	m.upsertBlockedCalled.Store(true)
+	if m.onUpsertBlocked != nil {
+		m.onUpsertBlocked()
+	}
+	return nil
 }
 
 func (m *mockDB) RecordCVEAlert(_ context.Context, ecosystem, name, version, cveID, severity, outcome string) error {
@@ -969,9 +979,12 @@ func TestServeHTTP_CVEScanningEnabled_BlockPolicy_RequestRejected(t *testing.T) 
 	cache := &mockCache{}
 	database := &mockDB{}
 
-	// recordCVEAlerts runs in a goroutine — wait for it before the test exits.
+	// UpsertBlockedPackage and recordCVEAlerts both run in goroutines — wait for them.
+	blockedDone := make(chan struct{})
+	database.onUpsertBlocked = func() { close(blockedDone) }
+
 	cveAlertDone := make(chan struct{})
-	database.onRecordEvent = func() { close(cveAlertDone) }
+	database.onRecordCVEAlert = func() { close(cveAlertDone) }
 
 	store := &mockStorage{}
 
@@ -1004,6 +1017,28 @@ func TestServeHTTP_CVEScanningEnabled_BlockPolicy_RequestRejected(t *testing.T) 
 
 	if !checker.checkCalled.Load() {
 		t.Error("security.Check was not called")
+	}
+
+	// Wait for the blocked-package upsert goroutine.
+	select {
+	case <-blockedDone:
+	case <-time.After(time.Second):
+		t.Fatal("UpsertBlockedPackage was not called within 1s")
+	}
+
+	if !database.upsertBlockedCalled.Load() {
+		t.Error("db.UpsertBlockedPackage was not called when package is blocked")
+	}
+
+	// Wait for the CVE alert recording goroutine.
+	select {
+	case <-cveAlertDone:
+	case <-time.After(time.Second):
+		t.Fatal("RecordCVEAlert was not called within 1s")
+	}
+
+	if !database.recordCVEAlertCalled.Load() {
+		t.Error("db.RecordCVEAlert was not called when package is blocked")
 	}
 }
 
@@ -1273,6 +1308,106 @@ func TestServeHTTP_PyPISimpleIndex(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != wantHTML {
 		t.Errorf("body mismatch:\ngot:  %s\nwant: %s", body, wantHTML)
+	}
+}
+
+// TestServeHTTP_GoPackage_PackageServedAndAlertsRecorded verifies that on a full
+// cache miss for a Go module: the upstream zip bytes are returned to the caller
+// and CVE alerts are recorded in the database. This catches the case where the
+// proxy records alerts but silently drops the response body.
+func TestServeHTTP_GoPackage_PackageServedAndAlertsRecorded(t *testing.T) {
+	const (
+		testData    = "fake go module zip bytes"
+		testEco     = "go"
+		testName    = "github.com/gin-gonic/gin"
+		testVersion = "v1.6.0"
+		testCVEID   = "GHSA-jf85-cpcp-j695"
+	)
+
+	cveRecords := []security.CVERecord{
+		{ID: testCVEID, Summary: "Open redirect in gin", Severity: security.SeverityHigh},
+	}
+	checker := &mockSecurityChecker{
+		checkFunc: func(_ context.Context, _, _, _ string) (security.Outcome, []security.CVERecord, error) {
+			return security.Warn, cveRecords, nil
+		},
+	}
+
+	cache := &mockCache{}
+
+	// Capture RecordCVEAlert arguments and signal when both goroutines finish.
+	cveAlertDone := make(chan struct{})
+	writeDone := make(chan struct{})
+	var gotEco, gotName, gotVersion, gotCVEID, gotSeverity string
+	database := &mockDB{
+		onRecordCVEAlertArgs: func(ecosystem, name, version, cveID, severity, outcome string) {
+			gotEco, gotName, gotVersion, gotCVEID, gotSeverity = ecosystem, name, version, cveID, severity
+		},
+		onRecordCVEAlert: func() { close(cveAlertDone) },
+		onRecordEvent:    func() { close(writeDone) },
+	}
+
+	store := &mockStorage{}
+	router := NewRouter([]string{"go"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}))
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(testData)),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/go/github.com/gin-gonic/gin/@v/v1.6.0.zip", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	// The package zip bytes must reach the caller — not just a 200 with no body.
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != testData {
+		t.Errorf("body: got %q, want %q", string(body), testData)
+	}
+
+	if got := resp.Header.Get("X-Cache"); got != "miss" {
+		t.Errorf("X-Cache: got %q, want %q", got, "miss")
+	}
+
+	// Wait for the CVE alert recording goroutine.
+	select {
+	case <-cveAlertDone:
+	case <-time.After(time.Second):
+		t.Fatal("RecordCVEAlert was not called within 1s — CVE alert pipeline broken for Go ecosystem")
+	}
+
+	if !database.recordCVEAlertCalled.Load() {
+		t.Error("db.RecordCVEAlert was not called")
+	}
+	if gotEco != testEco {
+		t.Errorf("ecosystem: got %q, want %q", gotEco, testEco)
+	}
+	if gotName != testName {
+		t.Errorf("name: got %q, want %q", gotName, testName)
+	}
+	if gotVersion != testVersion {
+		t.Errorf("version: got %q, want %q", gotVersion, testVersion)
+	}
+	if gotCVEID != testCVEID {
+		t.Errorf("cveID: got %q, want %q", gotCVEID, testCVEID)
+	}
+	if gotSeverity != "HIGH" {
+		t.Errorf("severity: got %q, want %q", gotSeverity, "HIGH")
+	}
+
+	// Wait for the write-back goroutine to finish cleanly.
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("write-back goroutine did not complete within 1s")
 	}
 }
 
