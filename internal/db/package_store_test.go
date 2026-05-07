@@ -79,9 +79,9 @@ func TestGetPackage_Found(t *testing.T) {
 	mock.ExpectQuery("SELECT id, ecosystem").
 		WithArgs("npm", "lodash", "4.17.21").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "ecosystem", "name", "version",
+			"id", "ecosystem", "name", "version", "status",
 			"checksum", "size_bytes", "cached_at", "last_hit_at",
-		}).AddRow(int64(1), "npm", "lodash", "4.17.21", "abc123", int64(500), now, nil))
+		}).AddRow(int64(1), "npm", "lodash", "4.17.21", "cached", "abc123", int64(500), now, nil))
 
 	db := &DB{sqlDB}
 	pkg, err := db.GetPackage(context.Background(), "npm", "lodash", "4.17.21")
@@ -90,6 +90,9 @@ func TestGetPackage_Found(t *testing.T) {
 	}
 	if pkg.Name != "lodash" || pkg.Checksum != "abc123" {
 		t.Errorf("unexpected package: %+v", pkg)
+	}
+	if pkg.Status != "cached" {
+		t.Errorf("expected status %q, got %q", "cached", pkg.Status)
 	}
 	if pkg.LastHitAt != nil {
 		t.Errorf("expected nil LastHitAt, got %v", pkg.LastHitAt)
@@ -186,11 +189,11 @@ func TestListVersions_ReturnsPackages(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	rows := sqlmock.NewRows([]string{
-		"id", "ecosystem", "name", "version",
+		"id", "ecosystem", "name", "version", "status",
 		"checksum", "size_bytes", "cached_at", "last_hit_at",
 	}).
-		AddRow(int64(1), "npm", "lodash", "4.17.21", "abc123", int64(500), now, nil).
-		AddRow(int64(2), "npm", "lodash", "4.17.20", "def456", int64(480), now, nil)
+		AddRow(int64(1), "npm", "lodash", "4.17.21", "cached", "abc123", int64(500), now, nil).
+		AddRow(int64(2), "npm", "lodash", "4.17.20", "cached", "def456", int64(480), now, nil)
 
 	mock.ExpectQuery("SELECT id, ecosystem").
 		WithArgs("npm", "lodash", 25, 0).
@@ -219,7 +222,7 @@ func TestListVersions_Empty(t *testing.T) {
 	mock.ExpectQuery("SELECT id, ecosystem").
 		WithArgs("npm", "nonexistent", 25, 0).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "ecosystem", "name", "version",
+			"id", "ecosystem", "name", "version", "status",
 			"checksum", "size_bytes", "cached_at", "last_hit_at",
 		}))
 
@@ -262,9 +265,9 @@ func TestListVersions_ScanError(t *testing.T) {
 
 	// Return a row with a bad value for id (string instead of int64)
 	rows := sqlmock.NewRows([]string{
-		"id", "ecosystem", "name", "version",
+		"id", "ecosystem", "name", "version", "status",
 		"checksum", "size_bytes", "cached_at", "last_hit_at",
-	}).AddRow("not-an-int", "npm", "lodash", "4.17.21", "abc123", int64(500), time.Now(), nil)
+	}).AddRow("not-an-int", "npm", "lodash", "4.17.21", "cached", "abc123", int64(500), time.Now(), nil)
 
 	mock.ExpectQuery("SELECT id, ecosystem").
 		WillReturnRows(rows)
@@ -329,8 +332,8 @@ func TestGetStats_HitRateComputed(t *testing.T) {
 
 	mock.ExpectQuery("SELECT").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"total_packages", "total_hits", "total_misses", "bytes_saved",
-		}).AddRow(int64(10), int64(8), int64(2), int64(4096)))
+			"total_packages", "blocked_packages", "total_hits", "total_misses", "bytes_saved",
+		}).AddRow(int64(10), int64(3), int64(8), int64(2), int64(4096)))
 
 	db := &DB{sqlDB}
 	stats, err := db.GetStats(context.Background(), time.Now().Add(-24*time.Hour))
@@ -339,6 +342,9 @@ func TestGetStats_HitRateComputed(t *testing.T) {
 	}
 	if stats.TotalPackages != 10 {
 		t.Errorf("TotalPackages: got %d, want 10", stats.TotalPackages)
+	}
+	if stats.BlockedPackages != 3 {
+		t.Errorf("BlockedPackages: got %d, want 3", stats.BlockedPackages)
 	}
 	if stats.TotalHits != 8 {
 		t.Errorf("TotalHits: got %d, want 8", stats.TotalHits)
@@ -364,8 +370,8 @@ func TestGetStats_NoEvents_HitRateZero(t *testing.T) {
 
 	mock.ExpectQuery("SELECT").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"total_packages", "total_hits", "total_misses", "bytes_saved",
-		}).AddRow(int64(0), int64(0), int64(0), int64(0)))
+			"total_packages", "blocked_packages", "total_hits", "total_misses", "bytes_saved",
+		}).AddRow(int64(0), int64(0), int64(0), int64(0), int64(0)))
 
 	db := &DB{sqlDB}
 	stats, err := db.GetStats(context.Background(), time.Now().Add(-24*time.Hour))
