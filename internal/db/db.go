@@ -110,4 +110,13 @@ const schema = `
 
 	CREATE INDEX IF NOT EXISTS packages_last_accessed
 		ON packages (COALESCE(last_hit_at, cached_at));
+
+	-- Add status column for blocked-package tracking (idempotent).
+	DO $$ BEGIN
+		ALTER TABLE packages ADD COLUMN status TEXT NOT NULL DEFAULT 'cached';
+	EXCEPTION WHEN duplicate_column THEN NULL;
+	END $$;
+
+	ALTER TABLE packages ALTER COLUMN checksum SET DEFAULT '';
+	CREATE INDEX IF NOT EXISTS packages_status ON packages (status);
 `
