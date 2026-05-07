@@ -10,7 +10,7 @@ const formatDate = (iso: string) =>
     year: "numeric",
   });
 
-const COLUMNS = ["Version", "Size", "Cached", "Last Hit"];
+const COLUMNS = ["Version", "Status", "Size", "Cached", "Last Hit"];
 
 interface VersionsTableProps {
   packages: Package[];
@@ -28,7 +28,7 @@ export const VersionsTable = ({
   basePath,
 }: VersionsTableProps) => (
   <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm">
-    <div className="grid grid-cols-[1fr_90px_120px_120px] gap-4 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 rounded-t-xl">
+    <div className="grid grid-cols-[1fr_80px_90px_120px_120px] gap-4 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 rounded-t-xl">
       {COLUMNS.map((col) => (
         <span
           key={col}
@@ -49,13 +49,24 @@ export const VersionsTable = ({
           <Link
             key={pkg.id}
             href={`/packages/${pkg.ecosystem}/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}`}
-            className="grid grid-cols-[1fr_90px_120px_120px] items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            className="grid grid-cols-[1fr_80px_90px_120px_120px] items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
           >
             <span className="text-sm font-mono text-gray-900 dark:text-gray-100">
               {pkg.version}
             </span>
+            <span className="text-sm">
+              {pkg.status === "blocked" ? (
+                <span className="inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
+                  Blocked
+                </span>
+              ) : (
+                <span className="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
+                  Cached
+                </span>
+              )}
+            </span>
             <span className="text-sm text-gray-500 dark:text-gray-400">
-              {formatBytes(pkg.size_bytes)}
+              {pkg.status === "blocked" ? "—" : formatBytes(pkg.size_bytes)}
             </span>
             <span className="text-sm text-gray-500 dark:text-gray-400">
               {formatDate(pkg.cached_at)}
