@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,6 +159,280 @@ func dbConfigFromConnStr(t *testing.T, connStr string) db.Config {
 		fmt.Sscanf(connStr, "postgres://user:pass@localhost:%d/testdb", &cfg.Port)
 	}
 	return cfg
+}
+
+// TestIntegration_NpmPackage_CriticalCVE_Blocked verifies the end-to-end blocking
+// pipeline when security.cve_scanning=true and security.block_severity=CRITICAL.
+// It requests ejs@2.7.4, which has a CRITICAL server-side template injection
+// vulnerability (GHSA-phwq-j96m-2c2q, CVSS 9.8), against a real Postgres
+// container and asserts:
+//   - The proxy returns 403 Forbidden (not 502)
+//   - The package row in the DB has status = 'blocked'
+func TestIntegration_NpmPackage_CriticalCVE_Blocked(t *testing.T) {
+	if err := exec.Command("docker", "info").Run(); err != nil {
+		t.Skip("Docker not available:", err)
+	}
+
+	ctx := context.Background()
+
+	container, err := postgres.Run(ctx, "postgres:16-alpine",
+		postgres.WithDatabase("testdb"),
+		postgres.WithUsername("user"),
+		postgres.WithPassword("pass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+		),
+	)
+	if err != nil {
+		t.Fatalf("start postgres: %v", err)
+	}
+	defer func() {
+		if err := testcontainers.TerminateContainer(container); err != nil {
+			t.Errorf("terminate postgres: %v", err)
+		}
+	}()
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("container connection string: %v", err)
+	}
+
+	database, err := db.Open(dbConfigFromConnStr(t, connStr))
+	if err != nil {
+		t.Fatalf("db open: %v", err)
+	}
+	defer database.Close()
+
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatalf("db migrate: %v", err)
+	}
+
+	// cve_scanning=true, block_severity=CRITICAL — mirrors the documented config.
+	checker := security.NewChecker(true, "CRITICAL", "HIGH")
+
+	router := NewRouter([]string{"npm"})
+
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	store := &mockStorage{}
+	m := metrics.New(prometheus.NewRegistry(), []string{})
+	p := New(router, store, logger, &mockCache{}, database, checker, m)
+
+	// The upstream should never be reached for a blocked package.
+	upstreamCalled := false
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		upstreamCalled = true
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("should not be reached")),
+		}, nil
+	})
+
+	const (
+		eco     = "npm"
+		name    = "ejs"
+		version = "2.7.4"
+	)
+
+	// --- First request: OSV scan → block → DB persisted ---
+	req := httptest.NewRequest(http.MethodGet, "/npm/ejs/-/ejs-2.7.4.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("first request: expected 403 Forbidden, got %d", w.Code)
+	}
+	if upstreamCalled {
+		t.Error("upstream should not be called for a blocked package")
+	}
+
+	// UpsertBlockedPackage runs in a goroutine — poll the DB until the row lands.
+	var pkg db.Package
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		pkg, err = database.GetPackage(ctx, eco, name, version)
+		if err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("package row not found in DB within 10s: %v", err)
+	}
+	if pkg.Status != "blocked" {
+		t.Errorf("expected package status %q, got %q", "blocked", pkg.Status)
+	}
+
+	// --- Second request: DB short-circuit, no storage or OSV scan ---
+	store.getCalled.Store(false) // reset between requests
+	logBuf.Reset()
+
+	req2 := httptest.NewRequest(http.MethodGet, "/npm/ejs/-/ejs-2.7.4.tgz", nil)
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("second request: expected 403 Forbidden, got %d", w2.Code)
+	}
+	if store.getCalled.Load() {
+		t.Error("second request: storage.Get was called — blocked packages must not touch object storage")
+	}
+	if log := logBuf.String(); !strings.Contains(log, "previously blocked") {
+		t.Errorf("second request: expected log line containing %q; got: %s", "previously blocked", log)
+	}
+}
+
+// TestIntegration_CachedPackage_MissThenHit exercises the full miss→cached→hit
+// lifecycle against a real Postgres container:
+//   - First request: upstream is fetched, X-Cache: miss, DB row status = 'cached'
+//   - Second request: served from storage via DB checksum, X-Cache: hit, upstream never called again
+func TestIntegration_CachedPackage_MissThenHit(t *testing.T) {
+	if err := exec.Command("docker", "info").Run(); err != nil {
+		t.Skip("Docker not available:", err)
+	}
+
+	ctx := context.Background()
+
+	container, err := postgres.Run(ctx, "postgres:16-alpine",
+		postgres.WithDatabase("testdb"),
+		postgres.WithUsername("user"),
+		postgres.WithPassword("pass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+		),
+	)
+	if err != nil {
+		t.Fatalf("start postgres: %v", err)
+	}
+	defer func() {
+		if err := testcontainers.TerminateContainer(container); err != nil {
+			t.Errorf("terminate postgres: %v", err)
+		}
+	}()
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("container connection string: %v", err)
+	}
+
+	database, err := db.Open(dbConfigFromConnStr(t, connStr))
+	if err != nil {
+		t.Fatalf("db open: %v", err)
+	}
+	defer database.Close()
+
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatalf("db migrate: %v", err)
+	}
+
+	// CVE scanning disabled — package is clean and always allowed.
+	checker := security.NewChecker(false, "CRITICAL", "HIGH")
+
+	// In-memory storage so the test controls Put/Get without a real object store.
+	var storageMu sync.Mutex
+	storageData := make(map[string][]byte)
+	store := &mockStorage{
+		getFunc: func(_ context.Context, checksum string) (io.ReadCloser, error) {
+			storageMu.Lock()
+			defer storageMu.Unlock()
+			if data, ok := storageData[checksum]; ok {
+				return io.NopCloser(bytes.NewReader(data)), nil
+			}
+			return nil, fmt.Errorf("storage: not found")
+		},
+		putFunc: func(_ context.Context, checksum string, r io.Reader, _ int64) error {
+			data, err := io.ReadAll(r)
+			if err != nil {
+				return err
+			}
+			storageMu.Lock()
+			storageData[checksum] = data
+			storageMu.Unlock()
+			return nil
+		},
+	}
+
+	const fakeBody = "fake-lodash-bytes"
+
+	router := NewRouter([]string{"npm"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := metrics.New(prometheus.NewRegistry(), []string{})
+	// mockCache always misses — forces every request through the DB path.
+	p := New(router, store, logger, &mockCache{}, database, checker, m)
+
+	var upstreamCalls int
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		upstreamCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(fakeBody)),
+		}, nil
+	})
+
+	const (
+		eco     = "npm"
+		name    = "lodash"
+		version = "4.17.21"
+	)
+
+	// --- First request: cache miss ---
+	req1 := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w1 := httptest.NewRecorder()
+	p.ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d", w1.Code)
+	}
+	if got := w1.Header().Get("X-Cache"); got != "miss" {
+		t.Errorf("first request: X-Cache = %q, want %q", got, "miss")
+	}
+	if w1.Body.String() != fakeBody {
+		t.Errorf("first request: body = %q, want %q", w1.Body.String(), fakeBody)
+	}
+	if upstreamCalls != 1 {
+		t.Errorf("first request: upstream call count = %d, want 1", upstreamCalls)
+	}
+
+	// The write-back goroutine (UpsertPackage) runs async — poll until the DB row lands.
+	var pkg db.Package
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		pkg, err = database.GetPackage(ctx, eco, name, version)
+		if err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("DB row not found within 10s: %v", err)
+	}
+	if pkg.Status != "cached" {
+		t.Errorf("DB status = %q, want %q", pkg.Status, "cached")
+	}
+
+	// --- Second request: DB hit → storage hit ---
+	store.getCalled.Store(false)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w2 := httptest.NewRecorder()
+	p.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second request: expected 200, got %d", w2.Code)
+	}
+	if got := w2.Header().Get("X-Cache"); got != "hit" {
+		t.Errorf("second request: X-Cache = %q, want %q", got, "hit")
+	}
+	if w2.Body.String() != fakeBody {
+		t.Errorf("second request: body = %q, want %q", w2.Body.String(), fakeBody)
+	}
+	if upstreamCalls != 1 {
+		t.Errorf("second request: upstream called again (total=%d) — expected exactly 1 upstream call", upstreamCalls)
+	}
+	if !store.getCalled.Load() {
+		t.Error("second request: storage.Get was never called — expected DB-checksum lookup to hit object storage")
+	}
 }
 
 func severitiesOf(alerts []db.CVEAlert) []string {

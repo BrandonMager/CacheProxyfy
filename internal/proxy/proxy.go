@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,10 @@ import (
 	"github.com/BrandonMager/CacheProxyfy/internal/singleflight"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
 )
+
+// errPackageBlocked is returned by serve when a security policy blocks a package.
+// ServeHTTP uses it to return 403 Forbidden instead of the generic 502.
+var errPackageBlocked = errors.New("package blocked by security policy")
 
 type Proxy struct {
 	router   *Router
@@ -92,6 +97,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.metrics.RequestDuration.WithLabelValues(ecoName, result).Observe(elapsed)
 
 	if err != nil {
+		if errors.Is(err, errPackageBlocked) {
+			p.logger.Warn("package blocked",
+				"ecosystem", ecoName, "package", pkg.Name,
+			)
+			http.Error(w, "package blocked by security policy", http.StatusForbidden)
+			return
+		}
 		p.logger.Error("serve failed",
 			"ecosystem", ecoName, "package", pkg.Name, "error", err,
 		)
@@ -135,7 +147,13 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 		}
 	}
 
-	if dbPkg, err := p.db.GetPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil && dbPkg.Status != "blocked" {
+	if dbPkg, err := p.db.GetPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil {
+		if dbPkg.Status == "blocked" {
+			p.logger.Info("package previously blocked, skipping storage and security scan",
+				"ecosystem", pkg.Ecosystem, "package", pkg.Name, "version", pkg.Version,
+			)
+			return nil, "", errPackageBlocked
+		}
 		rc, err := p.storage.Get(ctx, dbPkg.Checksum)
 		if err == nil {
 			defer rc.Close()
@@ -167,7 +185,7 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 				p.logger.Warn("upsert blocked package failed", "package", pkg.Name, "error", err)
 			}
 		}()
-		return nil, "", fmt.Errorf("package blocked by security policy: %s@%s", pkg.Name, pkg.Version)
+		return nil, "", errPackageBlocked
 	}
 
 	if outcome == security.Warn {
