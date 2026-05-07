@@ -93,6 +93,11 @@ func TestIntegration_GoPackage_CVEAlertsRecorded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+	// Verify the package bytes are returned to the caller — not just a 200 with an empty body.
+	if got := w.Body.String(); got != "fake zip bytes" {
+		t.Fatalf("body: got %q, want %q", got, "fake zip bytes")
+	}
+
 	// recordCVEAlerts runs in a goroutine — poll until alerts land in Postgres.
 	const (
 		eco     = "go"
