@@ -17,6 +17,7 @@ type DBClient interface {
 	GetPackage(ctx context.Context, ecosystem, name, version string) (db.Package, error)
 	TouchPackage(ctx context.Context, ecosystem, name, version string) error
 	UpsertPackage(ctx context.Context, pkg db.Package) (string, error)
+	UpsertBlockedPackage(ctx context.Context, ecosystem, name, version string) error
 	RecordEvent(ctx context.Context, ecosystem, name, version, event string, bytes int64) error
 	RecordCVEAlert(ctx context.Context, ecosystem, name, version, cveID, severity, outcome string) error
 }
