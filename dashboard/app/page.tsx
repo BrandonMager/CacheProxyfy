@@ -3,7 +3,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { EcosystemBadge } from "@/components/ui/ecosystem-badge";
 import { formatBytes } from "@/lib/format";
 import { getStats, listPackages, listCVEAlerts } from "@/lib/api";
-import { Package, HardDrive, Zap, Shield } from "lucide-react";
+import { Package, HardDrive, Zap, Shield, ShieldBan } from "lucide-react";
 
 export default async function Home() {
   const [stats, packages, alerts] = await Promise.all([
@@ -12,17 +12,19 @@ export default async function Home() {
     listCVEAlerts().catch(() => []),
   ]);
 
-  const packagesLabel   = stats?.total_packages != null ? String(stats.total_packages) : "—";
-  const hitRateLabel    = stats?.hit_rate       != null ? `${(stats.hit_rate * 100).toFixed(1)}%` : "—";
-  const bytesSavedLabel = stats?.bytes_saved    != null ? formatBytes(stats.bytes_saved) : "—";
+  const packagesLabel   = stats?.total_packages   != null ? String(stats.total_packages) : "—";
+  const blockedLabel    = stats?.blocked_packages != null ? String(stats.blocked_packages) : "—";
+  const hitRateLabel    = stats?.hit_rate         != null ? `${(stats.hit_rate * 100).toFixed(1)}%` : "—";
+  const bytesSavedLabel = stats?.bytes_saved      != null ? formatBytes(stats.bytes_saved) : "—";
   const alertsLabel     = String(alerts.length);
 
   const recent = packages.slice(0, 5);
 
   return (
     <SidebarLayout title="Overview" subtitle="Cache performance for the last 24 hours">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
         <StatCard icon={Package}   label="Packages Cached" value={packagesLabel}   color="blue" />
+        <StatCard icon={ShieldBan} label="Blocked"         value={blockedLabel}    color="orange" />
         <StatCard icon={Zap}       label="Cache Hit Rate"  value={hitRateLabel}    color="green" />
         <StatCard icon={HardDrive} label="Bandwidth Saved" value={bytesSavedLabel} color="purple" />
         <StatCard icon={Shield}    label="CVE Alerts"      value={alertsLabel}     color="red" />
@@ -40,8 +42,13 @@ export default async function Home() {
                   <EcosystemBadge ecosystem={pkg.ecosystem} />
                   <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{pkg.name}</span>
                   <span className="text-xs text-gray-500 dark:text-gray-400">v{pkg.version}</span>
+                  {pkg.status === "blocked" && (
+                    <span className="inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
+                      Blocked
+                    </span>
+                  )}
                 </div>
-                <span className="text-sm text-gray-500 dark:text-gray-400">{formatBytes(pkg.size_bytes)}</span>
+                <span className="text-sm text-gray-500 dark:text-gray-400">{pkg.status === "blocked" ? "—" : formatBytes(pkg.size_bytes)}</span>
               </div>
             ))
           )}

@@ -32,14 +32,29 @@ export const PackageDetail = ({ pkg }: { pkg: Package }) => (
       <span className="text-lg text-gray-400 dark:text-gray-500">
         {pkg.version}
       </span>
+      {pkg.status === "blocked" && (
+        <span className="inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
+          Blocked
+        </span>
+      )}
     </div>
 
     <div className="px-6">
       <Row label="Ecosystem" value={pkg.ecosystem} />
       <Row label="Name" value={pkg.name} />
       <Row label="Version" value={pkg.version} />
-      <Row label="Size" value={formatBytes(pkg.size_bytes)} />
-      <Row label="Checksum" value={pkg.checksum} />
+      <Row
+        label="Status"
+        value={
+          pkg.status === "blocked" ? (
+            <span className="text-red-600 dark:text-red-400 font-semibold">Blocked</span>
+          ) : (
+            <span className="text-green-600 dark:text-green-400">Cached</span>
+          )
+        }
+      />
+      <Row label="Size" value={pkg.status === "blocked" ? "—" : formatBytes(pkg.size_bytes)} />
+      <Row label="Checksum" value={pkg.status === "blocked" ? "—" : pkg.checksum} />
       <Row label="Cached at" value={formatDate(pkg.cached_at)} />
       <Row
         label="Last hit"

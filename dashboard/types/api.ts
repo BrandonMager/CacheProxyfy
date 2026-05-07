@@ -3,6 +3,7 @@ export interface Package {
   ecosystem: string;
   name: string;
   version: string;
+  status: "cached" | "blocked";
   checksum: string;
   size_bytes: number;
   cached_at: string;
@@ -28,6 +29,7 @@ export interface PackageSummary {
   total_size_bytes: number;
   last_cached_at: string;
   last_hit_at: string | null;
+  has_blocked: boolean;
 }
 
 export interface PaginatedResponse<T> {
@@ -39,6 +41,7 @@ export interface PaginatedResponse<T> {
 
 export interface Stats {
   total_packages: number;
+  blocked_packages: number;
   total_hits: number;
   total_misses: number;
   bytes_saved: number;

@@ -18,8 +18,13 @@ export const PackageRow = ({ summary }: { summary: PackageSummary }) => (
     <div className="flex items-center justify-center">
       <EcosystemBadge ecosystem={summary.ecosystem} />
     </div>
-    <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+    <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate flex items-center gap-2">
       {summary.name}
+      {summary.has_blocked && (
+        <span className="inline-flex items-center rounded-full bg-red-100 dark:bg-red-900/30 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
+          Blocked
+        </span>
+      )}
     </span>
     <span className="text-sm text-gray-500 dark:text-gray-400 font-mono truncate">
       {summary.latest_version}
