@@ -15,6 +15,7 @@ type Package struct {
 	Ecosystem string     `json:"ecosystem"`
 	Name      string     `json:"name"`
 	Version   string     `json:"version"`
+	Status    string     `json:"status"`
 	Checksum  string     `json:"checksum"`
 	SizeBytes int64      `json:"size_bytes"`
 	CachedAt  time.Time  `json:"cached_at"`
@@ -26,12 +27,13 @@ if the (ecosystem, name, version) already exists */
 
 func (db *DB) UpsertPackage(ctx context.Context, pkg Package) (string, error) {
 	const q = `
-		INSERT INTO packages (ecosystem, name, version, checksum, size_bytes)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO packages (ecosystem, name, version, checksum, size_bytes, status)
+		VALUES ($1, $2, $3, $4, $5, 'cached')
 		ON CONFLICT (ecosystem, name, version)
-		DO UPDATE SET 
+		DO UPDATE SET
 			checksum = EXCLUDED.checksum,
-			size_bytes = EXCLUDED.size_bytes
+			size_bytes = EXCLUDED.size_bytes,
+			status = 'cached'
 		RETURNING checksum
 	`
 
@@ -51,9 +53,25 @@ func (db *DB) UpsertPackage(ctx context.Context, pkg Package) (string, error) {
 	return checksum, nil
 }
 
+func (db *DB) UpsertBlockedPackage(ctx context.Context, ecosystem, name, version string) error {
+	const q = `
+		INSERT INTO packages (ecosystem, name, version, status, checksum, size_bytes)
+		VALUES ($1, $2, $3, 'blocked', '', 0)
+		ON CONFLICT (ecosystem, name, version)
+		DO UPDATE SET status = 'blocked', checksum = '', size_bytes = 0
+	`
+
+	_, err := db.ExecContext(ctx, q, ecosystem, name, version)
+	if err != nil {
+		return fmt.Errorf("db: upsert blocked package: %w", err)
+	}
+
+	return nil
+}
+
 func (db *DB) GetPackage(ctx context.Context, ecosystem, name, version string) (Package, error) {
 	const q = `
-		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
+		SELECT id, ecosystem, name, version, status, checksum, size_bytes, cached_at, last_hit_at
 		FROM packages
 		WHERE ecosystem = $1 AND name = $2 AND version = $3
 	`
@@ -64,6 +82,7 @@ func (db *DB) GetPackage(ctx context.Context, ecosystem, name, version string) (
 		&pkg.Ecosystem,
 		&pkg.Name,
 		&pkg.Version,
+		&pkg.Status,
 		&pkg.Checksum,
 		&pkg.SizeBytes,
 		&pkg.CachedAt,
@@ -98,7 +117,7 @@ func (db *DB) TouchPackage(ctx context.Context, ecosystem, name, version string)
 
 func (db *DB) ListVersions(ctx context.Context, ecosystem, name string, limit, offset int) ([]Package, error){
 	const q = `
-		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
+		SELECT id, ecosystem, name, version, status, checksum, size_bytes, cached_at, last_hit_at
 		FROM packages
 		WHERE ecosystem = $1 AND name = $2
 		ORDER BY cached_at DESC
@@ -116,9 +135,10 @@ func (db *DB) ListVersions(ctx context.Context, ecosystem, name string, limit, o
 		var pkg Package
 		if err := rows.Scan(
 			&pkg.ID,
-			&pkg.Ecosystem, 
+			&pkg.Ecosystem,
 			&pkg.Name,
 			&pkg.Version,
+			&pkg.Status,
 			&pkg.Checksum,
 			&pkg.SizeBytes,
 			&pkg.CachedAt,
@@ -143,6 +163,7 @@ type PackageSummary struct {
 	TotalSizeBytes int64      `json:"total_size_bytes"`
 	LastCachedAt   time.Time  `json:"last_cached_at"`
 	LastHitAt      *time.Time `json:"last_hit_at"`
+	HasBlocked     bool       `json:"has_blocked"`
 }
 
 // CountPackageSummaries returns the total number of unique (ecosystem, name)
@@ -180,7 +201,8 @@ func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string, limit,
 			COUNT(*)           AS version_count,
 			SUM(size_bytes)    AS total_size_bytes,
 			MAX(cached_at)     AS last_cached_at,
-			MAX(last_hit_at)   AS last_hit_at
+			MAX(last_hit_at)   AS last_hit_at,
+			BOOL_OR(status = 'blocked') AS has_blocked
 		FROM packages p
 		GROUP BY ecosystem, name
 		ORDER BY MAX(cached_at) DESC
@@ -198,7 +220,8 @@ func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string, limit,
 			COUNT(*)           AS version_count,
 			SUM(size_bytes)    AS total_size_bytes,
 			MAX(cached_at)     AS last_cached_at,
-			MAX(last_hit_at)   AS last_hit_at
+			MAX(last_hit_at)   AS last_hit_at,
+			BOOL_OR(status = 'blocked') AS has_blocked
 		FROM packages p
 		WHERE ecosystem = $1
 		GROUP BY ecosystem, name
@@ -231,6 +254,7 @@ func (db *DB) ListPackageSummaries(ctx context.Context, ecosystem string, limit,
 			&s.TotalSizeBytes,
 			&s.LastCachedAt,
 			&s.LastHitAt,
+			&s.HasBlocked,
 		); err != nil {
 			return nil, fmt.Errorf("db: list package summaries scan: %w", err)
 		}
@@ -254,12 +278,12 @@ func (db *DB) CountVersions(ctx context.Context, ecosystem, name string) (int, e
 // If ecosystem is non-empty, results are filtered to that ecosystem.
 func (db *DB) ListPackages(ctx context.Context, ecosystem string) ([]Package, error) {
 	const qAll = `
-		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
+		SELECT id, ecosystem, name, version, status, checksum, size_bytes, cached_at, last_hit_at
 		FROM packages
 		ORDER BY cached_at DESC
 	`
 	const qEco = `
-		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
+		SELECT id, ecosystem, name, version, status, checksum, size_bytes, cached_at, last_hit_at
 		FROM packages
 		WHERE ecosystem = $1
 		ORDER BY cached_at DESC
@@ -287,6 +311,7 @@ func (db *DB) ListPackages(ctx context.Context, ecosystem string) ([]Package, er
 			&pkg.Ecosystem,
 			&pkg.Name,
 			&pkg.Version,
+			&pkg.Status,
 			&pkg.Checksum,
 			&pkg.SizeBytes,
 			&pkg.CachedAt,
@@ -304,9 +329,9 @@ func (db *DB) ListPackages(ctx context.Context, ecosystem string) ([]Package, er
 // or cached_at if never hit) is older than olderThan, ordered oldest first.
 func (db *DB) ListExpiredPackages(ctx context.Context, olderThan time.Time) ([]Package, error) {
 	const q = `
-		SELECT id, ecosystem, name, version, checksum, size_bytes, cached_at, last_hit_at
+		SELECT id, ecosystem, name, version, status, checksum, size_bytes, cached_at, last_hit_at
 		FROM packages
-		WHERE COALESCE(last_hit_at, cached_at) < $1
+		WHERE status = 'cached' AND COALESCE(last_hit_at, cached_at) < $1
 		ORDER BY COALESCE(last_hit_at, cached_at) ASC
 	`
 
@@ -324,6 +349,7 @@ func (db *DB) ListExpiredPackages(ctx context.Context, olderThan time.Time) ([]P
 			&pkg.Ecosystem,
 			&pkg.Name,
 			&pkg.Version,
+			&pkg.Status,
 			&pkg.Checksum,
 			&pkg.SizeBytes,
 			&pkg.CachedAt,
@@ -457,27 +483,29 @@ func (db *DB) ListCVEAlerts(ctx context.Context, since time.Time, ecosystem stri
 }
 
 type Stats struct {
-	TotalPackages int64   `json:"total_packages"`
-	TotalHits     int64   `json:"total_hits"`
-	TotalMisses   int64   `json:"total_misses"`
-	BytesSaved    int64   `json:"bytes_saved"`
-	HitRate       float64 `json:"hit_rate"`
+	TotalPackages   int64   `json:"total_packages"`
+	BlockedPackages int64   `json:"blocked_packages"`
+	TotalHits       int64   `json:"total_hits"`
+	TotalMisses     int64   `json:"total_misses"`
+	BytesSaved      int64   `json:"bytes_saved"`
+	HitRate         float64 `json:"hit_rate"`
 }
 
 func (db *DB) GetStats(ctx context.Context, since time.Time) (Stats, error) {
 	const q = `
-		SELECT 
-			(SELECT COUNT(*) FROM packages) AS total_packages,
+		SELECT
+			(SELECT COUNT(*) FROM packages WHERE status = 'cached') AS total_packages,
+			(SELECT COUNT(*) FROM packages WHERE status = 'blocked') AS blocked_packages,
 			COUNT(*) FILTER (WHERE event = 'hit') AS total_hits,
 			COUNT(*) FILTER (WHERE event = 'miss') AS total_misses,
 			COALESCE(SUM(bytes) FILTER (WHERE event = 'hit'), 0) AS bytes_saved
-
 		FROM cache_events
 		WHERE recorded_at >= $1
 	`
 	var s Stats
 	err := db.QueryRowContext(ctx, q, since).Scan(
 		&s.TotalPackages,
+		&s.BlockedPackages,
 		&s.TotalHits,
 		&s.TotalMisses,
 		&s.BytesSaved,
