@@ -135,7 +135,7 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 		}
 	}
 
-	if dbPkg, err := p.db.GetPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil {
+	if dbPkg, err := p.db.GetPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil && dbPkg.Status != "blocked" {
 		rc, err := p.storage.Get(ctx, dbPkg.Checksum)
 		if err == nil {
 			defer rc.Close()
@@ -162,6 +162,11 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 	go p.recordCVEAlerts(pkg, outcome, records)
 
 	if outcome == security.Block {
+		go func() {
+			if err := p.db.UpsertBlockedPackage(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version); err != nil {
+				p.logger.Warn("upsert blocked package failed", "package", pkg.Name, "error", err)
+			}
+		}()
 		return nil, "", fmt.Errorf("package blocked by security policy: %s@%s", pkg.Name, pkg.Version)
 	}
 
