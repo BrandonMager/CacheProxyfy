@@ -489,6 +489,7 @@ type Stats struct {
 	TotalMisses     int64   `json:"total_misses"`
 	BytesSaved      int64   `json:"bytes_saved"`
 	HitRate         float64 `json:"hit_rate"`
+	CVEAlerts       int64   `json:"cve_alerts"`
 }
 
 func (db *DB) GetStats(ctx context.Context, since time.Time) (Stats, error) {
@@ -498,7 +499,8 @@ func (db *DB) GetStats(ctx context.Context, since time.Time) (Stats, error) {
 			(SELECT COUNT(*) FROM packages WHERE status = 'blocked') AS blocked_packages,
 			COUNT(*) FILTER (WHERE event = 'hit') AS total_hits,
 			COUNT(*) FILTER (WHERE event = 'miss') AS total_misses,
-			COALESCE(SUM(bytes) FILTER (WHERE event = 'hit'), 0) AS bytes_saved
+			COALESCE(SUM(bytes) FILTER (WHERE event = 'hit'), 0) AS bytes_saved,
+			(SELECT COUNT(*) FROM cve_alerts WHERE recorded_at >= $1) AS cve_alerts
 		FROM cache_events
 		WHERE recorded_at >= $1
 	`
@@ -509,6 +511,7 @@ func (db *DB) GetStats(ctx context.Context, since time.Time) (Stats, error) {
 		&s.TotalHits,
 		&s.TotalMisses,
 		&s.BytesSaved,
+		&s.CVEAlerts,
 	)
 
 	if err != nil {
