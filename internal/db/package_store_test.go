@@ -332,8 +332,8 @@ func TestGetStats_HitRateComputed(t *testing.T) {
 
 	mock.ExpectQuery("SELECT").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"total_packages", "blocked_packages", "total_hits", "total_misses", "bytes_saved",
-		}).AddRow(int64(10), int64(3), int64(8), int64(2), int64(4096)))
+			"total_packages", "blocked_packages", "total_hits", "total_misses", "bytes_saved", "cve_alerts",
+		}).AddRow(int64(10), int64(3), int64(8), int64(2), int64(4096), int64(2)))
 
 	db := &DB{sqlDB}
 	stats, err := db.GetStats(context.Background(), time.Now().Add(-24*time.Hour))
@@ -370,8 +370,8 @@ func TestGetStats_NoEvents_HitRateZero(t *testing.T) {
 
 	mock.ExpectQuery("SELECT").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"total_packages", "blocked_packages", "total_hits", "total_misses", "bytes_saved",
-		}).AddRow(int64(0), int64(0), int64(0), int64(0), int64(0)))
+			"total_packages", "blocked_packages", "total_hits", "total_misses", "bytes_saved", "cve_alerts",
+		}).AddRow(int64(0), int64(0), int64(0), int64(0), int64(0), int64(0)))
 
 	db := &DB{sqlDB}
 	stats, err := db.GetStats(context.Background(), time.Now().Add(-24*time.Hour))
