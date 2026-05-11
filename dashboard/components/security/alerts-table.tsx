@@ -3,11 +3,21 @@
 import { useState } from "react";
 import type { CVEAlert } from "@/types/api";
 import { SeverityTabs, type SeverityTab } from "./severity-tabs";
+import { TimeFilter, type TimeWindow } from "./time-filter";
+import { EcosystemFilter, type EcosystemOption } from "./ecosystem-filter";
 import { AlertRow } from "./alert-row";
 
 const COLUMNS = ["Severity", "CVE ID", "Package", "Ecosystem", "Version", "Outcome", "Recorded"];
 
-export const AlertsTable = ({ alerts }: { alerts: CVEAlert[] }) => {
+export const AlertsTable = ({
+  alerts,
+  activeWindow,
+  activeEcosystem,
+}: {
+  alerts: CVEAlert[];
+  activeWindow: TimeWindow;
+  activeEcosystem: EcosystemOption;
+}) => {
   const [activeTab, setActiveTab] = useState<SeverityTab>("All");
 
   const filtered =
@@ -26,7 +36,11 @@ export const AlertsTable = ({ alerts }: { alerts: CVEAlert[] }) => {
             {filtered.length} alert{filtered.length !== 1 ? "s" : ""}
           </p>
         </div>
-        <SeverityTabs active={activeTab} onChange={setActiveTab} />
+        <div className="flex items-center gap-3">
+          <EcosystemFilter active={activeEcosystem} />
+          <TimeFilter active={activeWindow} />
+          <SeverityTabs active={activeTab} onChange={setActiveTab} />
+        </div>
       </div>
 
       <div className="grid grid-cols-[90px_160px_1fr_100px_130px_90px_120px] gap-4 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50">

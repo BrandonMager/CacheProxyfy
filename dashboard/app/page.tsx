@@ -2,21 +2,20 @@ import { SidebarLayout } from "@/components/layout/sidebar-layout";
 import { StatCard } from "@/components/ui/stat-card";
 import { EcosystemBadge } from "@/components/ui/ecosystem-badge";
 import { formatBytes } from "@/lib/format";
-import { getStats, listPackages, listCVEAlerts } from "@/lib/api";
+import { getStats, listPackages } from "@/lib/api";
 import { Package, HardDrive, Zap, Shield, ShieldBan } from "lucide-react";
 
 export default async function Home() {
-  const [stats, packages, alerts] = await Promise.all([
+  const [stats, packages] = await Promise.all([
     getStats().catch(() => null),
     listPackages().catch(() => []),
-    listCVEAlerts().catch(() => []),
   ]);
 
   const packagesLabel   = stats?.total_packages   != null ? String(stats.total_packages) : "—";
   const blockedLabel    = stats?.blocked_packages != null ? String(stats.blocked_packages) : "—";
   const hitRateLabel    = stats?.hit_rate         != null ? `${(stats.hit_rate * 100).toFixed(1)}%` : "—";
   const bytesSavedLabel = stats?.bytes_saved      != null ? formatBytes(stats.bytes_saved) : "—";
-  const alertsLabel     = String(alerts.length);
+  const alertsLabel     = stats?.cve_alerts       != null ? String(stats.cve_alerts) : "—";
 
   const recent = packages.slice(0, 5);
 
