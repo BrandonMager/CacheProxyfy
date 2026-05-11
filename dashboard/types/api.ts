@@ -46,6 +46,7 @@ export interface Stats {
   total_misses: number;
   bytes_saved: number;
   hit_rate: number;
+  cve_alerts: number;
 }
 
 export interface ConfigResponse {
