@@ -6,7 +6,19 @@ import type { EcosystemOption } from "@/components/security/ecosystem-filter";
 
 const VALID_ECOSYSTEMS = new Set(["npm", "pypi", "maven", "go"]);
 
-function ytdHours(): string {
+export function resolveEcosystem(raw: string | undefined): EcosystemOption {
+  return raw && VALID_ECOSYSTEMS.has(raw) ? (raw as EcosystemOption) : "All";
+}
+
+export function resolveTimeWindow(raw: string | undefined): TimeWindow {
+  return raw === "168h" || raw === "ytd" ? raw : "24h";
+}
+
+export function resolveSince(window: TimeWindow): string {
+  return window === "ytd" ? ytdHours() : window;
+}
+
+export function ytdHours(): string {
   const now = new Date();
   const startOfYear = new Date(now.getFullYear(), 0, 1);
   const hours = Math.ceil((now.getTime() - startOfYear.getTime()) / 36e5);
@@ -19,11 +31,10 @@ export default async function SecurityPage({
   searchParams: Promise<{ since?: string; ecosystem?: string }>;
 }) {
   const { since: raw, ecosystem: rawEco } = await searchParams;
-  const window: TimeWindow = (raw === "168h" || raw === "ytd") ? raw : "24h";
-  const since = window === "ytd" ? ytdHours() : window;
+  const window = resolveTimeWindow(raw);
+  const since = resolveSince(window);
 
-  const activeEcosystem: EcosystemOption =
-    rawEco && VALID_ECOSYSTEMS.has(rawEco) ? (rawEco as EcosystemOption) : "All";
+  const activeEcosystem = resolveEcosystem(rawEco);
   const ecosystem = activeEcosystem === "All" ? undefined : activeEcosystem;
 
   const alerts = await listCVEAlerts(since, ecosystem).catch(() => []);
