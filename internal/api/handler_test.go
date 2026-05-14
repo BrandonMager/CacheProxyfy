@@ -271,6 +271,41 @@ func TestHandlePackages_MissingParams(t *testing.T) {
 	}
 }
 
+func TestHandlePackages_ListVersions_PageBeyondTotal(t *testing.T) {
+	stub := &stubDB{total: 10}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages?ecosystem=npm&name=react&page=10000000&page_size=25", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got paginatedResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Equal(t, 10, got.Total)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	assert.Empty(t, items)
+}
+
+func TestHandlePackages_ListVersions_ExactLastPage(t *testing.T) {
+	// total=25, page_size=25 → page 2 starts at offset 25 which equals total → empty
+	stub := &stubDB{total: 25}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages?ecosystem=npm&name=react&page=2&page_size=25", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got paginatedResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Equal(t, 25, got.Total)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	assert.Empty(t, items)
+}
+
 func TestHandlePackages_MethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/packages?ecosystem=npm&name=react", nil)
 	w := httptest.NewRecorder()
@@ -458,6 +493,41 @@ func TestHandlePackageSummaries_ReturnsSummaries(t *testing.T) {
 	items, ok := got.Items.([]interface{})
 	require.True(t, ok)
 	assert.Len(t, items, 2)
+}
+
+func TestHandlePackageSummaries_PageBeyondTotal(t *testing.T) {
+	stub := &stubDB{total: 5}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/summaries?page=10000000&page_size=25", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got paginatedResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Equal(t, 5, got.Total)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	assert.Empty(t, items)
+}
+
+func TestHandlePackageSummaries_ExactLastPage(t *testing.T) {
+	// total=50, page_size=25 → page 3 starts at offset 50 which equals total → empty
+	stub := &stubDB{total: 50}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/packages/summaries?page=3&page_size=25", nil)
+	w := httptest.NewRecorder()
+	newMux(stub).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var got paginatedResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
+	assert.Equal(t, 50, got.Total)
+	items, ok := got.Items.([]interface{})
+	require.True(t, ok)
+	assert.Empty(t, items)
 }
 
 func TestHandlePackageSummaries_Empty(t *testing.T) {
