@@ -115,6 +115,16 @@ func (h *Handler) handlePackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if offset >= total {
+		writeJSON(w, paginatedResponse{
+			Items:    []db.Package{},
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		})
+		return
+	}
+
 	pkgs, err := h.db.ListVersions(r.Context(), ecosystem, name, pageSize, offset)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -171,6 +181,16 @@ func (h *Handler) handlePackageSummaries(w http.ResponseWriter, r *http.Request)
 	total, err := h.db.CountPackageSummaries(r.Context(), ecosystem)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if offset >= total {
+		writeJSON(w, paginatedResponse{
+			Items:    []db.PackageSummary{},
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		})
 		return
 	}
 
