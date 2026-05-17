@@ -65,6 +65,7 @@ func TestMetricsEndpointRegistered(t *testing.T) {
 	m.UpstreamFetchDuration.WithLabelValues("npm").Observe(0.5)
 	m.CVEScansTotal.WithLabelValues("npm", "allow").Inc()
 	m.InflightRequests.Inc()
+	m.RateLimitWaitDuration.WithLabelValues("npm").Observe(0.05)
 
 	body := scrape(t, srv)
 
@@ -77,6 +78,7 @@ func TestMetricsEndpointRegistered(t *testing.T) {
 		"cacheproxyfy_upstream_fetch_duration_seconds",
 		"cacheproxyfy_cve_scans_total",
 		"cacheproxyfy_inflight_requests",
+		"cacheproxyfy_rate_limit_wait_duration_seconds",
 	}
 
 	for _, name := range expected {
@@ -151,5 +153,28 @@ func TestHistogramObserved(t *testing.T) {
 
 	if !strings.Contains(body, `cacheproxyfy_request_duration_seconds_count{ecosystem="npm",result="miss"} 2`) {
 		t.Errorf("expected duration _count = 2, body:\n%s", body)
+	}
+}
+
+// TestRateLimitWaitDuration verifies that rate-limit wait observations land in the
+// correct bucket and appear per ecosystem.
+func TestRateLimitWaitDuration(t *testing.T) {
+	m, srv := newTestServer(t)
+
+	// 50 ms wait — should land in the 0.05 bucket.
+	m.RateLimitWaitDuration.WithLabelValues("npm").Observe(0.05)
+	m.RateLimitWaitDuration.WithLabelValues("pypi").Observe(0.001)
+
+	body := scrape(t, srv)
+
+	if !strings.Contains(body, `cacheproxyfy_rate_limit_wait_duration_seconds_count{ecosystem="npm"} 1`) {
+		t.Errorf("expected npm wait _count = 1, body:\n%s", body)
+	}
+	if !strings.Contains(body, `cacheproxyfy_rate_limit_wait_duration_seconds_count{ecosystem="pypi"} 1`) {
+		t.Errorf("expected pypi wait _count = 1, body:\n%s", body)
+	}
+	// The 0.05 observation should be counted in the le="0.05" bucket.
+	if !strings.Contains(body, `cacheproxyfy_rate_limit_wait_duration_seconds_bucket{ecosystem="npm",le="0.05"} 1`) {
+		t.Errorf("expected npm observation in le=0.05 bucket, body:\n%s", body)
 	}
 }
