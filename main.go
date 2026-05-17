@@ -115,11 +115,16 @@ func run(logger *slog.Logger) error {
 
 	checker := security.NewChecker(cfg.Security.CVEScanning, cfg.Security.BlockSeverity, cfg.Security.WarnSeverity)
 
-	limiter := ratelimit.New(cfg.RateLimit.Enabled, cfg.RateLimit.RequestsPerSecond, cfg.RateLimit.Burst)
+	overrides := make(map[string]ratelimit.EcosystemLimit, len(cfg.RateLimit.Overrides))
+	for eco, ov := range cfg.RateLimit.Overrides {
+		overrides[eco] = ratelimit.EcosystemLimit{RPS: ov.RequestsPerSecond, Burst: ov.Burst}
+	}
+	limiter := ratelimit.New(cfg.RateLimit.Enabled, cfg.RateLimit.RequestsPerSecond, cfg.RateLimit.Burst, overrides)
 	if cfg.RateLimit.Enabled {
 		logger.Info("rate limiting enabled",
 			"rps", cfg.RateLimit.RequestsPerSecond,
 			"burst", cfg.RateLimit.Burst,
+			"overrides", len(overrides),
 		)
 	}
 

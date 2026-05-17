@@ -7,25 +7,33 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// EcosystemLimit holds per-ecosystem rate limit parameters that override the global defaults.
+type EcosystemLimit struct {
+	RPS   float64
+	Burst int
+}
+
 // Limiter throttles upstream fetch rates per ecosystem using independent token buckets.
 // When disabled, Wait is a no-op and all requests pass through immediately.
 type Limiter struct {
-	enabled bool
-	rps     float64
-	burst   int
-	mu      sync.Mutex
-	buckets map[string]*rate.Limiter
+	enabled   bool
+	rps       float64
+	burst     int
+	overrides map[string]EcosystemLimit
+	mu        sync.Mutex
+	buckets   map[string]*rate.Limiter
 }
 
 // New returns a Limiter. When enabled is false the limiter is inert.
-// rps is the sustained token refill rate (requests per second) per ecosystem.
-// burst is the maximum number of tokens that can accumulate.
-func New(enabled bool, rps float64, burst int) *Limiter {
+// rps and burst are the global defaults applied to any ecosystem without an override.
+// overrides maps ecosystem names to per-ecosystem limits; a nil map means no overrides.
+func New(enabled bool, rps float64, burst int, overrides map[string]EcosystemLimit) *Limiter {
 	return &Limiter{
-		enabled: enabled,
-		rps:     rps,
-		burst:   burst,
-		buckets: make(map[string]*rate.Limiter),
+		enabled:   enabled,
+		rps:       rps,
+		burst:     burst,
+		overrides: overrides,
+		buckets:   make(map[string]*rate.Limiter),
 	}
 }
 
@@ -44,7 +52,11 @@ func (l *Limiter) bucket(ecosystem string) *rate.Limiter {
 	if b, ok := l.buckets[ecosystem]; ok {
 		return b
 	}
-	b := rate.NewLimiter(rate.Limit(l.rps), l.burst)
+	rps, burst := l.rps, l.burst
+	if ov, ok := l.overrides[ecosystem]; ok {
+		rps, burst = ov.RPS, ov.Burst
+	}
+	b := rate.NewLimiter(rate.Limit(rps), burst)
 	l.buckets[ecosystem] = b
 	return b
 }

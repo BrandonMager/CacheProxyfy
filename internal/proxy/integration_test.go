@@ -77,7 +77,7 @@ func TestIntegration_GoPackage_CVEAlertsRecorded(t *testing.T) {
 	router := NewRouter([]string{"go"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := metrics.New(prometheus.NewRegistry(), []string{})
-	p := New(router, &mockStorage{}, logger, &mockCache{}, database, checker, m, ratelimit.New(false, 0, 0))
+	p := New(router, &mockStorage{}, logger, &mockCache{}, database, checker, m, ratelimit.New(false, 0, 0, nil))
 
 	// Intercept the upstream module fetch — the test only cares about CVE alerts,
 	// not the actual zip content.
@@ -218,7 +218,7 @@ func TestIntegration_NpmPackage_CriticalCVE_Blocked(t *testing.T) {
 
 	store := &mockStorage{}
 	m := metrics.New(prometheus.NewRegistry(), []string{})
-	p := New(router, store, logger, &mockCache{}, database, checker, m, ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, &mockCache{}, database, checker, m, ratelimit.New(false, 0, 0, nil))
 
 	// The upstream should never be reached for a blocked package.
 	upstreamCalled := false
@@ -360,7 +360,7 @@ func TestIntegration_CachedPackage_MissThenHit(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := metrics.New(prometheus.NewRegistry(), []string{})
 	// mockCache always misses — forces every request through the DB path.
-	p := New(router, store, logger, &mockCache{}, database, checker, m, ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, &mockCache{}, database, checker, m, ratelimit.New(false, 0, 0, nil))
 
 	var upstreamCalls int
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
