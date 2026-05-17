@@ -31,6 +31,7 @@ const STAT_LABELS = [
   "Cache Hit Rate",
   "Bandwidth Saved",
   "CVE Alerts",
+  "Est. Cost Saved",
 ];
 
 describe("API calls", () => {
@@ -52,6 +53,30 @@ describe("API failure", () => {
       const heading = screen.getByText(label);
       expect(heading.nextElementSibling).toHaveTextContent("—");
     }
+  });
+});
+
+describe("Est. Cost Saved stat card", () => {
+  it("shows formatted cost when bytes_saved is present", async () => {
+    // 1 GB at the default $0.09/GB rate = $0.09
+    mockGetStats.mockResolvedValue({ ...baseStats, bytes_saved: 1024 * 1024 * 1024 });
+    render(await Home());
+    const label = screen.getByText("Est. Cost Saved");
+    expect(label.nextElementSibling).toHaveTextContent("$0.09");
+  });
+
+  it("shows — when stats are unavailable", async () => {
+    mockGetStats.mockRejectedValue(new Error("network error"));
+    render(await Home());
+    const label = screen.getByText("Est. Cost Saved");
+    expect(label.nextElementSibling).toHaveTextContent("—");
+  });
+
+  it("shows $0.00 when bytes_saved is 0", async () => {
+    mockGetStats.mockResolvedValue({ ...baseStats, bytes_saved: 0 });
+    render(await Home());
+    const label = screen.getByText("Est. Cost Saved");
+    expect(label.nextElementSibling).toHaveTextContent("$0.00");
   });
 });
 
