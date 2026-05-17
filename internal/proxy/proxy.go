@@ -14,6 +14,7 @@ import (
 	"github.com/BrandonMager/CacheProxyfy/internal/db"
 	"github.com/BrandonMager/CacheProxyfy/internal/ecosystem"
 	"github.com/BrandonMager/CacheProxyfy/internal/metrics"
+	"github.com/BrandonMager/CacheProxyfy/internal/ratelimit"
 	"github.com/BrandonMager/CacheProxyfy/internal/security"
 	"github.com/BrandonMager/CacheProxyfy/internal/singleflight"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
@@ -24,19 +25,21 @@ import (
 var errPackageBlocked = errors.New("package blocked by security policy")
 
 type Proxy struct {
-	router   *Router
-	storage  storage.StorageBackend
-	cache    CacheClient
-	db       DBClient
-	security SecurityChecker
-	sf       *singleflight.Group
-	client   *http.Client
-	logger   *slog.Logger
-	metrics  *metrics.Metrics
+	router    *Router
+	storage   storage.StorageBackend
+	cache     CacheClient
+	db        DBClient
+	security  SecurityChecker
+	limiter   *ratelimit.Limiter
+	sf        *singleflight.Group
+	client    *http.Client
+	logger    *slog.Logger
+	metrics   *metrics.Metrics
 }
 
 func New(router *Router, store storage.StorageBackend, logger *slog.Logger,
 	cache CacheClient, db DBClient, security SecurityChecker, m *metrics.Metrics,
+	limiter *ratelimit.Limiter,
 ) *Proxy {
 	return &Proxy{
 		router:   router,
@@ -44,6 +47,7 @@ func New(router *Router, store storage.StorageBackend, logger *slog.Logger,
 		cache:    cache,
 		db:       db,
 		security: security,
+		limiter:  limiter,
 		sf:       singleflight.NewGroup(),
 		client: &http.Client{
 			Timeout: 5 * time.Minute,
@@ -199,6 +203,9 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 
 	var fetchDuration time.Duration
 	data, shared, err := p.sf.Do(pkg.Ecosystem, pkg.Name, pkg.Version, func() ([]byte, error) {
+		if err := p.limiter.Wait(ctx, pkg.Ecosystem); err != nil {
+			return nil, fmt.Errorf("rate limit: %w", err)
+		}
 		fetchStart := time.Now()
 		result, fetchErr := p.fetchFromUpstream(ctx, handler, pkg)
 		fetchDuration = time.Since(fetchStart)

@@ -18,6 +18,7 @@ import (
 	"github.com/BrandonMager/CacheProxyfy/internal/eviction"
 	"github.com/BrandonMager/CacheProxyfy/internal/metrics"
 	"github.com/BrandonMager/CacheProxyfy/internal/proxy"
+	"github.com/BrandonMager/CacheProxyfy/internal/ratelimit"
 	"github.com/BrandonMager/CacheProxyfy/internal/security"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -114,6 +115,14 @@ func run(logger *slog.Logger) error {
 
 	checker := security.NewChecker(cfg.Security.CVEScanning, cfg.Security.BlockSeverity, cfg.Security.WarnSeverity)
 
+	limiter := ratelimit.New(cfg.RateLimit.Enabled, cfg.RateLimit.RequestsPerSecond, cfg.RateLimit.Burst)
+	if cfg.RateLimit.Enabled {
+		logger.Info("rate limiting enabled",
+			"rps", cfg.RateLimit.RequestsPerSecond,
+			"burst", cfg.RateLimit.Burst,
+		)
+	}
+
 	authUsers := make([]auth.User, len(cfg.Auth.Users))
 	for i, u := range cfg.Auth.Users {
 		authUsers[i] = auth.User{Username: u.Username, PasswordHash: u.PasswordHash}
@@ -124,7 +133,7 @@ func run(logger *slog.Logger) error {
 	}
 
 	router := proxy.NewRouter(cfg.Proxy.Ecosystems)
-	p := proxy.New(router, store, logger, redisClient, database, checker, m)
+	p := proxy.New(router, store, logger, redisClient, database, checker, m, limiter)
 
 	// Separate mux: proxy traffic on the main port, /metrics and /api/* on a
 	// dedicated internal port (9090) so they are never accidentally exposed publicly.

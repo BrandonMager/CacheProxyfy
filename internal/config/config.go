@@ -7,14 +7,15 @@ import (
 )
 
 type Config struct {
-	Proxy    ProxyConfig    `mapstructure:"proxy"`
-	Cache    CacheConfig    `mapstructure:"cache"`
-	S3       S3Config       `mapstructure:"s3"`
-	Redis    RedisConfig    `mapstructure:"redis"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Security SecurityConfig `mapstructure:"security"`
-	Auth     AuthConfig     `mapstructure:"auth"`
-	Log      LogConfig      `mapstructure:"log"`
+	Proxy     ProxyConfig     `mapstructure:"proxy"`
+	Cache     CacheConfig     `mapstructure:"cache"`
+	S3        S3Config        `mapstructure:"s3"`
+	Redis     RedisConfig     `mapstructure:"redis"`
+	Database  DatabaseConfig  `mapstructure:"database"`
+	Security  SecurityConfig  `mapstructure:"security"`
+	Auth      AuthConfig      `mapstructure:"auth"`
+	Log       LogConfig       `mapstructure:"log"`
+	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 }
 
 type AuthConfig struct {
@@ -70,8 +71,17 @@ type SecurityConfig struct {
 }
 
 type LogConfig struct {
-	Level string `mapstructure:"level"`
+	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
+}
+
+// RateLimitConfig controls how aggressively the proxy throttles upstream fetches.
+// Independent token buckets are maintained per ecosystem, so a flood of npm requests
+// does not consume tokens from the PyPI bucket.
+type RateLimitConfig struct {
+	Enabled            bool    `mapstructure:"enabled"`
+	RequestsPerSecond  float64 `mapstructure:"requests_per_second"`
+	Burst              int     `mapstructure:"burst"`
 }
 
 func Load() (*Config, error) {
@@ -111,6 +121,10 @@ func Load() (*Config, error) {
 
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
+
+	v.SetDefault("rate_limit.enabled", false)
+	v.SetDefault("rate_limit.requests_per_second", 10.0)
+	v.SetDefault("rate_limit.burst", 20)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
