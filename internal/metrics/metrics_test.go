@@ -156,6 +156,28 @@ func TestHistogramObserved(t *testing.T) {
 	}
 }
 
+// TestRateLimitWaitDuration_PreInitialisedAtStartup verifies that
+// cacheproxyfy_rate_limit_wait_duration_seconds appears in /metrics immediately
+// after New is called with a non-empty ecosystem list — before any observations
+// are recorded. Prometheus omits metric families with no observations unless they
+// are explicitly pre-initialised, so this test guards the pre-init loop in New.
+func TestRateLimitWaitDuration_PreInitialisedAtStartup(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics.New(reg, []string{"npm", "pypi", "maven"}) // no observations made
+	srv := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	t.Cleanup(srv.Close)
+
+	body := scrape(t, srv)
+
+	// The metric family must appear for every pre-initialised ecosystem.
+	for _, eco := range []string{"npm", "pypi", "maven"} {
+		want := `cacheproxyfy_rate_limit_wait_duration_seconds_bucket{ecosystem="` + eco + `"`
+		if !strings.Contains(body, want) {
+			t.Errorf("ecosystem %q: expected metric in /metrics before any observations, got:\n%s", eco, body)
+		}
+	}
+}
+
 // TestRateLimitWaitDuration verifies that rate-limit wait observations land in the
 // correct bucket and appear per ecosystem.
 func TestRateLimitWaitDuration(t *testing.T) {
