@@ -42,7 +42,8 @@ describe("VersionsTable", () => {
 
     expect(screen.getByText("Version")).toBeInTheDocument();
     expect(screen.getByText("Size")).toBeInTheDocument();
-    expect(screen.getByText("Cached")).toBeInTheDocument();
+    // "Cached" appears in both the column header and status badges — use getAllByText
+    expect(screen.getAllByText("Cached").length).toBeGreaterThan(0);
     expect(screen.getByText("Last Hit")).toBeInTheDocument();
   });
 
