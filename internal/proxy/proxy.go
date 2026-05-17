@@ -24,6 +24,11 @@ import (
 // ServeHTTP uses it to return 403 Forbidden instead of the generic 502.
 var errPackageBlocked = errors.New("package blocked by security policy")
 
+// errRateLimited is returned by serve when the per-ecosystem token bucket is exhausted
+// and the request context expires before a token becomes available.
+// ServeHTTP uses it to return 429 Too Many Requests instead of the generic 502.
+var errRateLimited = errors.New("rate limit exceeded")
+
 type Proxy struct {
 	router    *Router
 	storage   storage.StorageBackend
@@ -106,6 +111,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"ecosystem", ecoName, "package", pkg.Name,
 			)
 			http.Error(w, "package blocked by security policy", http.StatusForbidden)
+			return
+		}
+		if errors.Is(err, errRateLimited) {
+			p.logger.Warn("rate limit exceeded",
+				"ecosystem", ecoName, "package", pkg.Name,
+			)
+			http.Error(w, "rate limit exceeded — retry later", http.StatusTooManyRequests)
 			return
 		}
 		p.logger.Error("serve failed",
@@ -205,7 +217,7 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 	data, shared, err := p.sf.Do(pkg.Ecosystem, pkg.Name, pkg.Version, func() ([]byte, error) {
 		waitStart := time.Now()
 		if err := p.limiter.Wait(ctx, pkg.Ecosystem); err != nil {
-			return nil, fmt.Errorf("rate limit: %w", err)
+			return nil, fmt.Errorf("%w: %w", errRateLimited, err)
 		}
 		p.metrics.RateLimitWaitDuration.WithLabelValues(pkg.Ecosystem).Observe(time.Since(waitStart).Seconds())
 		fetchStart := time.Now()

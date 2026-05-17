@@ -1540,11 +1540,11 @@ func TestServeHTTP_RateLimitWaitDuration_ObservedOnUpstreamFetch(t *testing.T) {
 	t.Errorf("metric %s not found in gathered output", metricName)
 }
 
-// TestServeHTTP_RateLimited_Returns502 verifies that when the per-ecosystem token bucket is
+// TestServeHTTP_RateLimited_Returns429 verifies that when the per-ecosystem token bucket is
 // exhausted and the request context expires before a token is available, the proxy returns
-// 502 Bad Gateway. The rate limiter sits inside the singleflight callback, so the error
-// propagates through sf.Do → serve → ServeHTTP just like an upstream fetch failure.
-func TestServeHTTP_RateLimited_Returns502(t *testing.T) {
+// 429 Too Many Requests. The rate limiter sits inside the singleflight callback; the
+// errRateLimited sentinel lets ServeHTTP distinguish this from a generic upstream failure.
+func TestServeHTTP_RateLimited_Returns429(t *testing.T) {
 	// burst=1, near-zero refill (~1000s per token): first request consumes the single token,
 	// second request will block until the context deadline fires.
 	limiter := ratelimit.New(true, 0.001, 1)
@@ -1578,8 +1578,8 @@ func TestServeHTTP_RateLimited_Returns502(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	p.ServeHTTP(w2, req2)
 
-	if w2.Code != http.StatusBadGateway {
-		t.Errorf("rate-limited request: expected 502, got %d", w2.Code)
+	if w2.Code != http.StatusTooManyRequests {
+		t.Errorf("rate-limited request: expected 429, got %d", w2.Code)
 	}
 
 	// Upstream should only have been called once — the rate-limited request never reached it.
