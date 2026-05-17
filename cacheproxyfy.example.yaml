@@ -50,3 +50,14 @@ rate_limit:
   enabled: false          # set to true to throttle upstream registry fetches
   requests_per_second: 10 # token refill rate per ecosystem (sustained throughput)
   burst: 20               # max tokens that can accumulate (handles short bursts)
+  # overrides: per-ecosystem limits that take precedence over the global defaults above.
+  # Useful when registries have different rate limits (e.g. proxy.golang.org is stricter
+  # than registry.npmjs.org). Must be configured via this YAML file — env vars cannot
+  # express nested maps.
+  # overrides:
+  #   npm:
+  #     requests_per_second: 50
+  #     burst: 100
+  #   maven:
+  #     requests_per_second: 5
+  #     burst: 10

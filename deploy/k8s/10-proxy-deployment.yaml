@@ -31,9 +31,6 @@ spec:
               containerPort: 8080
             - name: metrics
               containerPort: 9090
-          envFrom:
-            - configMapRef:
-                name: cacheproxyfy-config
           env:
             - name: CACHEPROXYFY_DATABASE_PASSWORD
               valueFrom:
@@ -48,6 +45,9 @@ spec:
           volumeMounts:
             - name: artifacts
               mountPath: /app/data/artifacts
+            - name: config
+              mountPath: /etc/cacheproxyfy
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /healthz
@@ -72,3 +72,6 @@ spec:
         - name: artifacts
           persistentVolumeClaim:
             claimName: artifacts
+        - name: config
+          configMap:
+            name: cacheproxyfy-config
