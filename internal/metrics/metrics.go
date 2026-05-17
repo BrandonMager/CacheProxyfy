@@ -41,6 +41,11 @@ type Metrics struct {
 	// InflightRequests is the instantaneous number of in-flight proxy requests.
 	// Use this as a saturation signal.
 	InflightRequests prometheus.Gauge
+
+	// RateLimitWaitDuration is how long upstream fetches spend waiting for a rate-limit
+	// token. Near-zero when the limiter is disabled or burst is available; higher values
+	// indicate upstream back-pressure. Labels: ecosystem
+	RateLimitWaitDuration *prometheus.HistogramVec
 }
 
 // proxyDurationBuckets covers the expected range for a caching proxy:
@@ -51,6 +56,11 @@ var proxyDurationBuckets = []float64{
 
 // sizeBuckets covers package sizes from 1 KB to ~256 MB in 4× steps.
 var sizeBuckets = prometheus.ExponentialBuckets(1024, 4, 10)
+
+// rateLimitWaitBuckets covers the expected range for token-bucket wait times:
+// from negligible (sub-millisecond when burst is available) to several seconds
+// (low rps, high concurrency).
+var rateLimitWaitBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
 // New registers all metrics against reg and returns the populated Metrics struct.
 // ecosystems is used to pre-initialise every labeled series at zero so all
@@ -101,6 +111,12 @@ func New(reg prometheus.Registerer, ecosystems []string) *Metrics {
 			Name: "cacheproxyfy_inflight_requests",
 			Help: "Current number of proxy requests in flight (saturation signal).",
 		}),
+
+		RateLimitWaitDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "cacheproxyfy_rate_limit_wait_duration_seconds",
+			Help:    "Time spent waiting for a rate-limit token before an upstream fetch, per ecosystem.",
+			Buckets: rateLimitWaitBuckets,
+		}, []string{"ecosystem"}),
 	}
 
 	reg.MustRegister(
@@ -112,6 +128,7 @@ func New(reg prometheus.Registerer, ecosystems []string) *Metrics {
 		m.UpstreamFetchDuration,
 		m.CVEScansTotal,
 		m.InflightRequests,
+		m.RateLimitWaitDuration,
 	)
 
 	for _, eco := range ecosystems {
@@ -130,6 +147,7 @@ func New(reg prometheus.Registerer, ecosystems []string) *Metrics {
 		for _, outcome := range []string{"allow", "warn", "block", "error"} {
 			m.CVEScansTotal.With(prometheus.Labels{"ecosystem": eco, "outcome": outcome})
 		}
+		m.RateLimitWaitDuration.With(prometheus.Labels{"ecosystem": eco})
 	}
 
 	return m
