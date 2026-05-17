@@ -203,9 +203,11 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 
 	var fetchDuration time.Duration
 	data, shared, err := p.sf.Do(pkg.Ecosystem, pkg.Name, pkg.Version, func() ([]byte, error) {
+		waitStart := time.Now()
 		if err := p.limiter.Wait(ctx, pkg.Ecosystem); err != nil {
 			return nil, fmt.Errorf("rate limit: %w", err)
 		}
+		p.metrics.RateLimitWaitDuration.WithLabelValues(pkg.Ecosystem).Observe(time.Since(waitStart).Seconds())
 		fetchStart := time.Now()
 		result, fetchErr := p.fetchFromUpstream(ctx, handler, pkg)
 		fetchDuration = time.Since(fetchStart)
