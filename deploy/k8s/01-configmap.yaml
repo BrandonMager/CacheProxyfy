@@ -4,27 +4,71 @@ metadata:
   name: cacheproxyfy-config
   namespace: cacheproxyfy
 data:
-  CACHEPROXYFY_PROXY_PORT: "8080"
-  CACHEPROXYFY_PROXY_ECOSYSTEMS: "npm,pypi,maven"
+  # Full application config mounted at /etc/cacheproxyfy/cacheproxyfy.yaml.
+  # Passwords and credentials are intentionally absent — they are injected at
+  # runtime from the cacheproxyfy-secret Secret as env vars, which viper picks
+  # up automatically via AutomaticEnv and overrides these empty defaults.
+  cacheproxyfy.yaml: |
+    proxy:
+      port: 8080
+      ecosystems:
+        - npm
+        - pypi
+        - maven
 
-  CACHEPROXYFY_DATABASE_HOST: postgres
-  CACHEPROXYFY_DATABASE_PORT: "5432"
-  CACHEPROXYFY_DATABASE_USER: cacheproxyfy
-  CACHEPROXYFY_DATABASE_DBNAME: cacheproxyfy
-  CACHEPROXYFY_DATABASE_SSLMODE: disable
+    cache:
+      backend: local       # "local" or "s3"
+      local_dir: /app/data/artifacts
+      ttl_hours: 720
+      eviction_interval_hours: 1
 
-  CACHEPROXYFY_REDIS_ADDR: redis:6379
-  CACHEPROXYFY_REDIS_DB: "0"
+    s3:
+      bucket: ""           # required when backend=s3
+      region: us-east-1
+      endpoint: ""         # optional: override for MinIO / LocalStack
+      key_prefix: ""       # optional: e.g. "artifacts"
+      access_key_id: ""    # optional: overridden by CACHEPROXYFY_S3_ACCESS_KEY_ID or IAM role
+      secret_access_key: "" # optional: overridden by CACHEPROXYFY_S3_SECRET_ACCESS_KEY or IAM role
 
-  CACHEPROXYFY_CACHE_BACKEND: local
-  CACHEPROXYFY_CACHE_LOCAL_DIR: /app/data/artifacts
-  CACHEPROXYFY_CACHE_TTL_HOURS: "720"
-  CACHEPROXYFY_CACHE_EVICTION_INTERVAL_HOURS: "1"
+    redis:
+      addr: redis:6379
+      db: 0
+      password: ""   # overridden by CACHEPROXYFY_REDIS_PASSWORD secret
 
-  CACHEPROXYFY_SECURITY_CVE_SCANNING: "true"
-  CACHEPROXYFY_SECURITY_BLOCK_SEVERITY: CRITICAL
-  CACHEPROXYFY_SECURITY_WARN_SEVERITY: HIGH
+    database:
+      host: postgres
+      port: 5432
+      user: cacheproxyfy
+      dbname: cacheproxyfy
+      sslmode: disable
+      password: ""   # overridden by CACHEPROXYFY_DATABASE_PASSWORD secret
 
-  CACHEPROXYFY_RATE_LIMIT_ENABLED: "false"
-  CACHEPROXYFY_RATE_LIMIT_REQUESTS_PER_SECOND: "10"
-  CACHEPROXYFY_RATE_LIMIT_BURST: "20"
+    security:
+      cve_scanning: true
+      block_severity: CRITICAL
+      warn_severity: HIGH
+
+    auth:
+      enabled: false
+      users:
+        # Generate a bcrypt hash for a password with either of these commands:
+        #   htpasswd -bnBC 12 "" yourpassword | tr -d ':\n'
+        #   docker run --rm httpd:alpine htpasswd -bnBC 12 "" yourpassword | tr -d ':\n'
+        # - username: alice
+        #   password_hash: "$2y$12$..."
+
+    log:
+      level: info
+      format: json
+
+    rate_limit:
+      enabled: false
+      requests_per_second: 10
+      burst: 20
+      # overrides:
+      #   npm:
+      #     requests_per_second: 50
+      #     burst: 100
+      #   maven:
+      #     requests_per_second: 5
+      #     burst: 10

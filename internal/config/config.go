@@ -78,17 +78,27 @@ type LogConfig struct {
 // RateLimitConfig controls how aggressively the proxy throttles upstream fetches.
 // Independent token buckets are maintained per ecosystem, so a flood of npm requests
 // does not consume tokens from the PyPI bucket.
+// Per-ecosystem overrides in Overrides take precedence over the global RPS/Burst defaults.
 type RateLimitConfig struct {
-	Enabled            bool    `mapstructure:"enabled"`
-	RequestsPerSecond  float64 `mapstructure:"requests_per_second"`
-	Burst              int     `mapstructure:"burst"`
+	Enabled           bool                                `mapstructure:"enabled"`
+	RequestsPerSecond float64                             `mapstructure:"requests_per_second"`
+	Burst             int                                 `mapstructure:"burst"`
+	Overrides         map[string]EcosystemRateLimitConfig `mapstructure:"overrides"`
+}
+
+// EcosystemRateLimitConfig holds rate limit parameters for a single ecosystem,
+// used to override the global defaults in RateLimitConfig.
+type EcosystemRateLimitConfig struct {
+	RequestsPerSecond float64 `mapstructure:"requests_per_second"`
+	Burst             int     `mapstructure:"burst"`
 }
 
 func Load() (*Config, error) {
 	v := viper.New()
 	v.SetConfigName("cacheproxyfy")
 	v.SetConfigType("yaml")
-	v.AddConfigPath(".")
+	v.AddConfigPath(".")                 // local development
+	v.AddConfigPath("/etc/cacheproxyfy") // k8s ConfigMap volume mount
 
 	v.SetEnvPrefix("CACHEPROXYFY")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
