@@ -162,7 +162,7 @@ func newProxy(t *testing.T, cache CacheClient, store *mockStorage, database *moc
 	router := NewRouter([]string{"npm"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := metrics.New(prometheus.NewRegistry(), []string{})
-	return New(router, store, logger, cache, database, &mockSecurityChecker{}, m, ratelimit.New(false, 0, 0)), m
+	return New(router, store, logger, cache, database, &mockSecurityChecker{}, m, ratelimit.New(false, 0, 0, nil)), m
 }
 
 // -- tests --
@@ -709,7 +709,7 @@ func TestRecordEvent_DBError_WarnsAndResponseUnaffected(t *testing.T) {
 	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
 
 	router := NewRouter([]string{"npm"})
-	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database}, &mockSecurityChecker{}, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, cache, &errRecordEventDB{mockDB: database}, &mockSecurityChecker{}, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
 	w := httptest.NewRecorder()
@@ -850,7 +850,7 @@ func TestServeHTTP_CVEScanningDisabled_PackagePassesThrough(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -921,7 +921,7 @@ func TestServeHTTP_CVEScanningEnabled_WarnPolicy_PackagePassesThrough(t *testing
 	baseHandler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
 	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
 
-	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -995,7 +995,7 @@ func TestServeHTTP_CVEScanningEnabled_BlockPolicy_RequestRejected(t *testing.T) 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	upstreamCalled := false
-	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamCalled = true
 		return &http.Response{
@@ -1081,7 +1081,7 @@ func TestRecordCVEAlert_InsertedAfterVulnerableScan(t *testing.T) {
 	router := NewRouter([]string{"npm"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -1153,7 +1153,7 @@ func TestServeHTTP_OSVRequestFailed_WarnsAndPackageServed(t *testing.T) {
 	baseHandler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
 	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
 
-	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -1226,7 +1226,7 @@ func TestServeHTTP_PyPIPEP658(t *testing.T) {
 	router := NewRouter([]string{"pypi"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := metrics.New(prometheus.NewRegistry(), []string{})
-	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m, ratelimit.New(false, 0, 0))
+	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m, ratelimit.New(false, 0, 0, nil))
 
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.String() {
@@ -1287,7 +1287,7 @@ func TestServeHTTP_PyPISimpleIndex(t *testing.T) {
 	router := NewRouter([]string{"pypi"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := metrics.New(prometheus.NewRegistry(), []string{})
-	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m, ratelimit.New(false, 0, 0))
+	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m, ratelimit.New(false, 0, 0, nil))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.String() != "https://pypi.org/simple/requests/" {
 			t.Errorf("unexpected upstream URL: %s", r.URL)
@@ -1353,7 +1353,7 @@ func TestServeHTTP_GoPackage_PackageServedAndAlertsRecorded(t *testing.T) {
 	store := &mockStorage{}
 	router := NewRouter([]string{"go"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, cache, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -1419,7 +1419,7 @@ func TestServeHTTP_GoEcosystemDisabled_Returns404(t *testing.T) {
 	router := NewRouter([]string{"npm", "pypi", "maven"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := metrics.New(prometheus.NewRegistry(), []string{})
-	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m, ratelimit.New(false, 0, 0))
+	p := New(router, &mockStorage{}, logger, &mockCache{}, &mockDB{}, &mockSecurityChecker{}, m, ratelimit.New(false, 0, 0, nil))
 
 	paths := []string{
 		"/go/golang.org/x/net/@v/v0.17.0.zip",
@@ -1458,7 +1458,7 @@ func TestServeHTTP_PreviouslyBlockedPackage_SkipsStorageAndSecurityScan(t *testi
 
 	store := &mockStorage{}
 	router := NewRouter([]string{"npm"})
-	p := New(router, store, logger, &mockCache{}, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0))
+	p := New(router, store, logger, &mockCache{}, database, checker, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
 	w := httptest.NewRecorder()
@@ -1495,7 +1495,7 @@ func TestServeHTTP_RateLimitWaitDuration_ObservedOnUpstreamFetch(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg, []string{})
-	p := New(router, store, logger, cache, database, &mockSecurityChecker{}, m, ratelimit.New(true, 100, 10))
+	p := New(router, store, logger, cache, database, &mockSecurityChecker{}, m, ratelimit.New(true, 100, 10, nil))
 
 	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -1547,7 +1547,7 @@ func TestServeHTTP_RateLimitWaitDuration_ObservedOnUpstreamFetch(t *testing.T) {
 func TestServeHTTP_RateLimited_Returns429(t *testing.T) {
 	// burst=1, near-zero refill (~1000s per token): first request consumes the single token,
 	// second request will block until the context deadline fires.
-	limiter := ratelimit.New(true, 0.001, 1)
+	limiter := ratelimit.New(true, 0.001, 1, nil)
 
 	router := NewRouter([]string{"npm"})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

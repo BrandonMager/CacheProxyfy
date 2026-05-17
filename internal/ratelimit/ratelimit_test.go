@@ -7,7 +7,7 @@ import (
 )
 
 func TestLimiter_Disabled_AlwaysPasses(t *testing.T) {
-	l := New(false, 0.001, 1) // absurdly low rate — disabled so it doesn't matter
+	l := New(false, 0.001, 1, nil) // absurdly low rate — disabled so it doesn't matter
 
 	for i := 0; i < 100; i++ {
 		if err := l.Wait(context.Background(), "npm"); err != nil {
@@ -18,7 +18,7 @@ func TestLimiter_Disabled_AlwaysPasses(t *testing.T) {
 
 func TestLimiter_Enabled_AllowsBurst(t *testing.T) {
 	const burst = 5
-	l := New(true, 0.001, burst) // near-zero refill so burst is the only tokens available
+	l := New(true, 0.001, burst, nil) // near-zero refill so burst is the only tokens available
 
 	for i := 0; i < burst; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -31,7 +31,7 @@ func TestLimiter_Enabled_AllowsBurst(t *testing.T) {
 }
 
 func TestLimiter_Enabled_RejectsWhenBurstExhausted(t *testing.T) {
-	l := New(true, 0.001, 1) // 1 token burst, near-zero refill (~1000s to next token)
+	l := New(true, 0.001, 1, nil) // 1 token burst, near-zero refill (~1000s to next token)
 
 	// First call consumes the burst token.
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -50,7 +50,7 @@ func TestLimiter_Enabled_RejectsWhenBurstExhausted(t *testing.T) {
 }
 
 func TestLimiter_PerEcosystem_IndependentBuckets(t *testing.T) {
-	l := New(true, 0.001, 1) // 1 token per ecosystem
+	l := New(true, 0.001, 1, nil) // 1 token per ecosystem
 
 	ecosystems := []string{"npm", "pypi", "maven", "go"}
 
@@ -80,8 +80,81 @@ func TestLimiter_PerEcosystem_IndependentBuckets(t *testing.T) {
 	}
 }
 
+func TestLimiter_Override_UsedInsteadOfGlobal(t *testing.T) {
+	// Global default: burst=1. npm override: burst=5.
+	// npm should allow 5 immediate calls; pypi (no override) should only allow 1.
+	overrides := map[string]EcosystemLimit{
+		"npm": {RPS: 0.001, Burst: 5},
+	}
+	l := New(true, 0.001, 1, overrides)
+
+	// npm: all 5 burst tokens should pass immediately.
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		err := l.Wait(ctx, "npm")
+		cancel()
+		if err != nil {
+			t.Fatalf("npm override burst call %d/5 should be allowed immediately: %v", i+1, err)
+		}
+	}
+
+	// npm: 6th call must block — override burst exhausted.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := l.Wait(ctx, "npm"); err == nil {
+		t.Error("npm: 6th call should block — override burst of 5 is exhausted")
+	}
+
+	// pypi: falls back to global burst=1, so second call must block.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel1()
+	if err := l.Wait(ctx1, "pypi"); err != nil {
+		t.Fatalf("pypi first call should be allowed (global burst=1): %v", err)
+	}
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel2()
+	if err := l.Wait(ctx2, "pypi"); err == nil {
+		t.Error("pypi: second call should block — global burst of 1 is exhausted")
+	}
+}
+
+func TestLimiter_Override_DoesNotAffectOtherEcosystems(t *testing.T) {
+	// Only maven is overridden. Confirm npm and pypi still see global defaults.
+	overrides := map[string]EcosystemLimit{
+		"maven": {RPS: 0.001, Burst: 10},
+	}
+	l := New(true, 0.001, 2, overrides) // global burst=2
+
+	// maven gets its own burst=10.
+	for i := 0; i < 10; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		err := l.Wait(ctx, "maven")
+		cancel()
+		if err != nil {
+			t.Fatalf("maven override burst call %d/10 should be allowed: %v", i+1, err)
+		}
+	}
+
+	// npm and pypi each get the global burst=2 independently.
+	for _, eco := range []string{"npm", "pypi"} {
+		for i := 0; i < 2; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			err := l.Wait(ctx, eco)
+			cancel()
+			if err != nil {
+				t.Fatalf("%s global burst call %d/2 should be allowed: %v", eco, i+1, err)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if err := l.Wait(ctx, eco); err == nil {
+			t.Errorf("%s: 3rd call should block — global burst of 2 exhausted", eco)
+		}
+	}
+}
+
 func TestLimiter_ContextCancellation(t *testing.T) {
-	l := New(true, 0.001, 1)
+	l := New(true, 0.001, 1, nil)
 
 	// Drain the burst token.
 	ctx0, cancel0 := context.WithTimeout(context.Background(), 50*time.Millisecond)
