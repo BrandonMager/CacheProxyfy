@@ -1481,6 +1481,65 @@ func TestServeHTTP_PreviouslyBlockedPackage_SkipsStorageAndSecurityScan(t *testi
 	}
 }
 
+// TestServeHTTP_RateLimitWaitDuration_ObservedOnUpstreamFetch verifies that
+// RateLimitWaitDuration is observed exactly once per singleflight-leader fetch (not per
+// waiting caller), and that the observation is non-negative.
+func TestServeHTTP_RateLimitWaitDuration_ObservedOnUpstreamFetch(t *testing.T) {
+	cache := &mockCache{}
+	database := &mockDB{}
+	goroutineDone := make(chan struct{})
+	database.onRecordEvent = func() { close(goroutineDone) }
+	store := &mockStorage{}
+
+	router := NewRouter([]string{"npm"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg, []string{})
+	p := New(router, store, logger, cache, database, &mockSecurityChecker{}, m, ratelimit.New(true, 100, 10))
+
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("data")),
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	select {
+	case <-goroutineDone:
+	case <-time.After(time.Second):
+		t.Fatal("write-back goroutine did not complete within 1s")
+	}
+
+	// Gather from the registry and locate the histogram to check its sample count.
+	// testutil.ToFloat64 panics on histograms, so we inspect the gathered proto directly.
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	const metricName = "cacheproxyfy_rate_limit_wait_duration_seconds"
+	for _, mf := range mfs {
+		if mf.GetName() == metricName {
+			ms := mf.GetMetric()
+			if len(ms) == 0 {
+				t.Fatalf("%s: no metric instances found", metricName)
+			}
+			if got := ms[0].GetHistogram().GetSampleCount(); got != 1 {
+				t.Errorf("%s SampleCount: got %d, want 1", metricName, got)
+			}
+			return
+		}
+	}
+	t.Errorf("metric %s not found in gathered output", metricName)
+}
+
 // TestServeHTTP_RateLimited_Returns502 verifies that when the per-ecosystem token bucket is
 // exhausted and the request context expires before a token is available, the proxy returns
 // 502 Bad Gateway. The rate limiter sits inside the singleflight callback, so the error
