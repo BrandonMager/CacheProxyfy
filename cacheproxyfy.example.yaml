@@ -45,3 +45,8 @@ auth:
     #   docker run --rm httpd:alpine htpasswd -bnBC 12 "" yourpassword | tr -d ':\n'
     # - username: alice
     #   password_hash: "$2y$12$..."
+
+rate_limit:
+  enabled: false          # set to true to throttle upstream registry fetches
+  requests_per_second: 10 # token refill rate per ecosystem (sustained throughput)
+  burst: 20               # max tokens that can accumulate (handles short bursts)
