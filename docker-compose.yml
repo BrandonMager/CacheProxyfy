@@ -115,6 +115,7 @@ services:
       API_URL: http://proxy:9090
       API_USERNAME: "${CACHEPROXYFY_DASHBOARD_USER}"
       API_PASSWORD: "${CACHEPROXYFY_DASHBOARD_PASSWORD}"
+      COST_PER_GB: "${COST_PER_GB:-0.09}"
     ports:
       - "3000:3000"
     networks:

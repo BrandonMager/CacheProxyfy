@@ -5,13 +5,11 @@ import { formatBytes, formatCost } from "@/lib/format";
 import { getStats, listPackages } from "@/lib/api";
 import { Package, HardDrive, Zap, Shield, ShieldBan, DollarSign } from "lucide-react";
 
-// COST_PER_GB is the estimated egress cost in USD per gigabyte used to calculate
-// how much bandwidth cost was avoided by serving artifacts from the cache instead
-// of fetching them from upstream registries. Defaults to $0.09/GB (typical CDN
-// egress rate). Set the COST_PER_GB environment variable to match your provider.
-const COST_PER_GB = Math.max(0, parseFloat(process.env.COST_PER_GB ?? "0.09") || 0.09);
-
 export default async function Home() {
+  // Read inside the component so Next.js evaluates this at request time during
+  // dynamic rendering, not once at module load. Defaults to $0.09/GB (typical
+  // CDN egress rate). Override via COST_PER_GB environment variable.
+  const costPerGb = Math.max(0, parseFloat(process.env.COST_PER_GB ?? "0.09") || 0.09);
   const [stats, packages] = await Promise.all([
     getStats().catch(() => null),
     listPackages().catch(() => []),
@@ -23,7 +21,7 @@ export default async function Home() {
   const bytesSavedLabel = stats?.bytes_saved      != null ? formatBytes(stats.bytes_saved) : "—";
   const alertsLabel     = stats?.cve_alerts       != null ? String(stats.cve_alerts) : "—";
   const costSavedLabel  = stats?.bytes_saved      != null
-    ? formatCost((stats.bytes_saved / (1024 ** 3)) * COST_PER_GB)
+    ? formatCost((stats.bytes_saved / (1024 ** 3)) * costPerGb)
     : "—";
 
   const recent = packages.slice(0, 5);
@@ -36,7 +34,7 @@ export default async function Home() {
         <StatCard icon={Zap}         label="Cache Hit Rate"  value={hitRateLabel}    color="green" />
         <StatCard icon={HardDrive}   label="Bandwidth Saved" value={bytesSavedLabel} color="purple" />
         <StatCard icon={Shield}      label="CVE Alerts"      value={alertsLabel}     color="red" />
-        <StatCard icon={DollarSign}  label="Est. Cost Saved" value={costSavedLabel}  color="green" sub={`@ $${COST_PER_GB.toFixed(2)}/GB`} />
+        <StatCard icon={DollarSign}  label="Est. Cost Saved" value={costSavedLabel}  color="green" sub={`@ $${costPerGb.toFixed(2)}/GB`} />
       </div>
 
       <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-6 shadow-sm">
