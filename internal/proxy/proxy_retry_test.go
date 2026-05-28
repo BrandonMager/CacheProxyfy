@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -388,6 +389,119 @@ func TestRetry_ContextCancelledDuringBackoff_StopsRetrying(t *testing.T) {
 	// The retry metric was incremented once (the retry was triggered, then cancelled).
 	if got := testutil.ToFloat64(m.UpstreamRetriesTotal.WithLabelValues("npm")); got != 1 {
 		t.Errorf("upstream_retries_total{npm} = %v, want 1", got)
+	}
+}
+
+// TestServeHTTP_SingleflightDeduplication_WithRetry verifies that when concurrent
+// requests are coalesced by singleflight and the leader's first upstream attempt
+// returns a transient error, the retry fires inside the singleflight callback and
+// all waiting callers receive the eventual successful result — not an error.
+//
+// Without this guarantee, a 503 during a thundering-herd burst would return errors
+// to every waiting caller even though a single retry would have recovered.
+func TestServeHTTP_SingleflightDeduplication_WithRetry(t *testing.T) {
+	const (
+		testData    = "fake package bytes"
+		concurrency = 5
+	)
+
+	cache := &mockCache{}
+	database := &mockDB{}
+	store := &mockStorage{}
+
+	goroutineDone := make(chan struct{})
+	database.onRecordEvent = func() { close(goroutineDone) }
+
+	p, m := newProxy(t, cache, store, database)
+	p.retry = zeroDelayRetry
+
+	var upstreamCallCount atomic.Int32
+	// release blocks the first upstream call until all goroutines are queued in sf.Do.
+	release := make(chan struct{})
+
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		n := upstreamCallCount.Add(1)
+		if n == 1 {
+			<-release // hold here until all goroutines are waiting in sf.Do
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}
+		// Second call: the singleflight leader's retry — succeeds immediately.
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(testData)),
+		}, nil
+	})
+
+	type result struct {
+		status   int
+		cacheHdr string
+		body     string
+	}
+	results := make([]result, concurrency)
+
+	var started, done sync.WaitGroup
+	started.Add(concurrency)
+	done.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func(i int) {
+			started.Done()
+			defer done.Done()
+			req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+			w := httptest.NewRecorder()
+			p.ServeHTTP(w, req)
+			resp := w.Result()
+			body, _ := io.ReadAll(resp.Body)
+			results[i] = result{
+				status:   resp.StatusCode,
+				cacheHdr: resp.Header.Get("X-Cache"),
+				body:     string(body),
+			}
+		}(i)
+	}
+
+	// Wait for all goroutines to be running then give them time to reach sf.Do.
+	started.Wait()
+	time.Sleep(20 * time.Millisecond)
+
+	// Unblock the first upstream call — it returns 503, triggering a retry inside
+	// the singleflight callback while all 4 other goroutines wait for the leader.
+	close(release)
+	done.Wait()
+
+	// Upstream was called exactly twice: the initial 503 and the successful retry.
+	if got := upstreamCallCount.Load(); got != 2 {
+		t.Errorf("upstream called %d times, want 2 (initial 503 + one retry)", got)
+	}
+
+	// All concurrent callers must receive the successful retry result — not the 503.
+	for i, r := range results {
+		if r.status != http.StatusOK {
+			t.Errorf("goroutine %d: expected status 200, got %d", i, r.status)
+		}
+		if r.cacheHdr != "miss" {
+			t.Errorf("goroutine %d: X-Cache: got %q, want %q", i, r.cacheHdr, "miss")
+		}
+		if r.body != testData {
+			t.Errorf("goroutine %d: body: got %q, want %q", i, r.body, testData)
+		}
+	}
+
+	// Fetch and retry counters reflect one logical upstream fetch (leader only).
+	if got := testutil.ToFloat64(m.UpstreamFetchesTotal.WithLabelValues("npm", "ok")); got != 1 {
+		t.Errorf("upstream_fetches_total{npm,ok} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.UpstreamRetriesTotal.WithLabelValues("npm")); got != 1 {
+		t.Errorf("upstream_retries_total{npm} = %v, want 1", got)
+	}
+
+	select {
+	case <-goroutineDone:
+	case <-time.After(time.Second):
+		t.Error("write-back goroutine did not complete within 1s")
 	}
 }
 
