@@ -1414,6 +1414,72 @@ func TestServeHTTP_GoPackage_PackageServedAndAlertsRecorded(t *testing.T) {
 	}
 }
 
+// TestServeHTTP_StorageReadErrorDuringStream verifies that if the storage reader
+// returns an error after headers have already been written (mid-stream), the proxy:
+//   - Does NOT attempt to write a second HTTP error response (which would corrupt
+//     the already-committed 200 status line)
+//   - Logs a warning instead
+//   - Returns without panicking
+//
+// This tests the deliberate design decision in serve: copyErr from io.Copy is
+// logged but not returned. If it were returned, ServeHTTP would call http.Error
+// on top of an already-started 200 response.
+func TestServeHTTP_StorageReadErrorDuringStream(t *testing.T) {
+	const testChecksum = "abc123"
+
+	cache := &mockCache{
+		getFunc: func(_ context.Context, _, _, _ string) (string, error) {
+			return testChecksum, nil
+		},
+	}
+
+	// errReader returns some bytes then fails, simulating a mid-stream storage error.
+	errReader := io.MultiReader(
+		strings.NewReader("partial data"),
+		errorReader{err: errors.New("disk read error")},
+	)
+
+	store := &mockStorage{
+		getFunc: func(_ context.Context, _ string) (io.ReadCloser, error) {
+			return io.NopCloser(errReader), nil
+		},
+	}
+
+	warnLogged := make(chan struct{})
+	var logBuf bytes.Buffer
+	baseHandler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	logger := slog.New(&warnSignalHandler{Handler: baseHandler, signal: func() { close(warnLogged) }})
+
+	router := NewRouter([]string{"npm"})
+	p := New(router, store, logger, cache, &mockDB{}, &mockSecurityChecker{}, metrics.New(prometheus.NewRegistry(), []string{}), ratelimit.New(false, 0, 0, nil))
+
+	req := httptest.NewRequest(http.MethodGet, "/npm/lodash/-/lodash-4.17.21.tgz", nil)
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	// Status must be 200 — headers were already committed before the copy error.
+	// A 502 here would indicate serve incorrectly returned copyErr to ServeHTTP.
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200 (headers already committed), got %d", w.Code)
+	}
+
+	// A warning must be logged for the streaming failure.
+	select {
+	case <-warnLogged:
+	case <-time.After(time.Second):
+		t.Fatal("streaming warning was not logged within 1s")
+	}
+
+	if log := logBuf.String(); !strings.Contains(log, "streaming cached artifact to client failed") {
+		t.Errorf("expected streaming warning in log, got: %s", log)
+	}
+}
+
+// errorReader is an io.Reader that always returns an error.
+type errorReader struct{ err error }
+
+func (e errorReader) Read(_ []byte) (int, error) { return 0, e.err }
+
 func TestServeHTTP_GoEcosystemDisabled_Returns404(t *testing.T) {
 	// Router built without "go" — all /go/... paths should return 404.
 	router := NewRouter([]string{"npm", "pypi", "maven"})
