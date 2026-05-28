@@ -98,7 +98,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.metrics.InflightRequests.Inc()
 	defer p.metrics.InflightRequests.Dec()
 
-	data, cacheStatus, err := p.serve(r.Context(), handler, pkg)
+	n, cacheStatus, err := p.serve(r.Context(), w, ecoName, handler, pkg)
 
 	elapsed := time.Since(start).Seconds()
 	result := cacheStatus
@@ -130,13 +130,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p.metrics.BytesServedTotal.WithLabelValues(ecoName, cacheStatus).Add(float64(len(data)))
-	p.metrics.PackageSizeBytes.WithLabelValues(ecoName).Observe(float64(len(data)))
-
-	w.Header().Set("X-Cache", cacheStatus)
-	w.Header().Set("x-CacheProxyfy-Ecosystem", ecoName)
-	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	p.metrics.BytesServedTotal.WithLabelValues(ecoName, cacheStatus).Add(float64(n))
+	p.metrics.PackageSizeBytes.WithLabelValues(ecoName).Observe(float64(n))
 
 	p.logger.Info("served",
 		"ecosystem", ecoName,
@@ -147,47 +142,60 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosystem.Package) ([]byte, string, error) {
-	// Check redis checksum
+// serve resolves pkg through the cache hierarchy or upstream and streams the
+// response body directly to w. Response headers and status 200 are written to w
+// only once a successful result is certain — all error paths return before touching
+// w, so ServeHTTP can still send an appropriate error response on non-nil err.
+//
+// Hit paths (Redis and DB) stream directly from storage to w with io.Copy, avoiding
+// a full in-memory buffer. The miss path must buffer via the singleflight callback
+// (all concurrent waiters share the same []byte result), but is bounded to one
+// concurrent upstream fetch per package by the singleflight group.
+func (p *Proxy) serve(ctx context.Context, w http.ResponseWriter, ecoName string, handler ecosystem.Handler, pkg *ecosystem.Package) (int64, string, error) {
+	// L1: Redis checksum cache → stream directly from storage, no full buffer.
 	if checksum, err := p.cache.Get(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil {
 		rc, err := p.storage.Get(ctx, checksum)
 		if err == nil {
 			defer rc.Close()
-			data, err := io.ReadAll(rc)
-			if err != nil {
-				return nil, "", fmt.Errorf("reading from storage: %w", err)
+			p.writeArtifactHeaders(w, ecoName, "hit")
+			n, copyErr := io.Copy(w, rc)
+			if copyErr != nil {
+				p.logger.Warn("streaming cached artifact to client failed", "package", pkg.Name, "error", copyErr)
 			}
-
 			go func() {
 				p.db.TouchPackage(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version)
-				p.recordEvent(pkg, "hit", int64(len(data)))
+				p.recordEvent(pkg, "hit", n)
 			}()
-			return data, "hit", nil
+			return n, "hit", nil
 		}
 	}
 
+	// L2: PostgreSQL metadata cache → stream directly from storage, no full buffer.
 	if dbPkg, err := p.db.GetPackage(ctx, pkg.Ecosystem, pkg.Name, pkg.Version); err == nil {
 		if dbPkg.Status == "blocked" {
 			p.logger.Info("package previously blocked, skipping storage and security scan",
 				"ecosystem", pkg.Ecosystem, "package", pkg.Name, "version", pkg.Version,
 			)
-			return nil, "", errPackageBlocked
+			return 0, "", errPackageBlocked
 		}
 		rc, err := p.storage.Get(ctx, dbPkg.Checksum)
 		if err == nil {
 			defer rc.Close()
-			data, err := io.ReadAll(rc)
-			if err != nil {
-				return nil, "", fmt.Errorf("reading from storage: %w", err)
+			p.writeArtifactHeaders(w, ecoName, "hit")
+			n, copyErr := io.Copy(w, rc)
+			if copyErr != nil {
+				p.logger.Warn("streaming cached artifact to client failed", "package", pkg.Name, "error", copyErr)
 			}
 			go func() {
 				p.cache.Set(context.Background(), pkg.Ecosystem, pkg.Name, pkg.Version, dbPkg.Checksum)
-				p.recordEvent(pkg, "hit", int64(len(data)))
+				p.recordEvent(pkg, "hit", n)
 			}()
-			return data, "hit", nil
+			return n, "hit", nil
 		}
 	}
 
+	// L3: upstream fetch — buffered via singleflight (required: all concurrent waiters
+	// share the same []byte result and RewriteResponse needs the full body).
 	outcome, records, err := p.security.Check(ctx, pkg.Ecosystem, pkg.Name, pkg.Version)
 	if err != nil {
 		p.logger.Warn("security check failed", "package", pkg.Name, "error", err)
@@ -204,7 +212,7 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 				p.logger.Warn("upsert blocked package failed", "package", pkg.Name, "error", err)
 			}
 		}()
-		return nil, "", errPackageBlocked
+		return 0, "", errPackageBlocked
 	}
 
 	if outcome == security.Warn {
@@ -240,13 +248,14 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 	}
 
 	if err != nil {
-		return nil, "", err
+		return 0, "", err
 	}
 
 	data, err = handler.RewriteResponse(ctx, data, pkg)
 	if err != nil {
-		return nil, "", fmt.Errorf("rewriting response: %w", err)
+		return 0, "", fmt.Errorf("rewriting response: %w", err)
 	}
+
 	if shared {
 		checksum := pkg.CacheKey()
 		if err := p.storage.Put(ctx, checksum, bytes.NewReader(data), int64(len(data))); err != nil {
@@ -263,12 +272,25 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 			}); err != nil {
 				p.logger.Warn("upsert package failed", "package", pkg.Name, "error", err)
 			}
-
 			p.recordEvent(pkg, "miss", int64(len(data)))
 		}()
 	}
 
-	return data, "miss", nil
+	p.writeArtifactHeaders(w, ecoName, "miss")
+	n, copyErr := io.Copy(w, bytes.NewReader(data))
+	if copyErr != nil {
+		p.logger.Warn("streaming upstream artifact to client failed", "package", pkg.Name, "error", copyErr)
+	}
+	return n, "miss", nil
+}
+
+// writeArtifactHeaders sets the proxy identification headers and commits the 200
+// status to w. Must be called immediately before writing the response body — once
+// called, no error response can be sent.
+func (p *Proxy) writeArtifactHeaders(w http.ResponseWriter, ecoName, cacheStatus string) {
+	w.Header().Set("X-Cache", cacheStatus)
+	w.Header().Set("x-CacheProxyfy-Ecosystem", ecoName)
+	w.WriteHeader(http.StatusOK)
 }
 
 // fetchFromUpstream fetches pkg from the upstream registry with exponential backoff
