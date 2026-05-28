@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,16 +31,17 @@ var errPackageBlocked = errors.New("package blocked by security policy")
 var errRateLimited = errors.New("rate limit exceeded")
 
 type Proxy struct {
-	router    *Router
-	storage   storage.StorageBackend
-	cache     CacheClient
-	db        DBClient
-	security  SecurityChecker
-	limiter   *ratelimit.Limiter
-	sf        *singleflight.Group
-	client    *http.Client
-	logger    *slog.Logger
-	metrics   *metrics.Metrics
+	router   *Router
+	storage  storage.StorageBackend
+	cache    CacheClient
+	db       DBClient
+	security SecurityChecker
+	limiter  *ratelimit.Limiter
+	sf       *singleflight.Group
+	client   *http.Client
+	logger   *slog.Logger
+	metrics  *metrics.Metrics
+	retry    retryConfig
 }
 
 func New(router *Router, store storage.StorageBackend, logger *slog.Logger,
@@ -59,6 +61,7 @@ func New(router *Router, store storage.StorageBackend, logger *slog.Logger,
 		},
 		logger:  logger,
 		metrics: m,
+		retry:   defaultRetryConfig,
 	}
 }
 
@@ -268,7 +271,42 @@ func (p *Proxy) serve(ctx context.Context, handler ecosystem.Handler, pkg *ecosy
 	return data, "miss", nil
 }
 
+// fetchFromUpstream fetches pkg from the upstream registry with exponential backoff
+// retry on transient failures (network errors, 5xx, 429). Non-retryable errors
+// (404, 403, context cancellation) are returned immediately.
 func (p *Proxy) fetchFromUpstream(ctx context.Context, handler ecosystem.Handler, pkg *ecosystem.Package) ([]byte, error) {
+	var lastErr error
+	for attempt := 0; attempt < p.retry.maxAttempts; attempt++ {
+		data, err := p.doFetch(ctx, handler, pkg)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		if attempt == p.retry.maxAttempts-1 || !isRetryable(err) {
+			break
+		}
+		delay := p.retryDelay(attempt, err)
+		p.logger.Warn("upstream fetch failed, retrying",
+			"ecosystem", pkg.Ecosystem,
+			"package", pkg.Name,
+			"version", pkg.Version,
+			"attempt", attempt+1,
+			"of", p.retry.maxAttempts,
+			"delay_ms", delay.Milliseconds(),
+			"error", err,
+		)
+		p.metrics.UpstreamRetriesTotal.WithLabelValues(pkg.Ecosystem).Inc()
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+// doFetch performs a single upstream HTTP GET for pkg with no retry logic.
+func (p *Proxy) doFetch(ctx context.Context, handler ecosystem.Handler, pkg *ecosystem.Package) ([]byte, error) {
 	url := handler.UpstreamURL(pkg)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -281,21 +319,24 @@ func (p *Proxy) fetchFromUpstream(ctx context.Context, handler ecosystem.Handler
 	if err != nil {
 		return nil, fmt.Errorf("upstream GET %s: %w", url, err)
 	}
-
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("package not found upstream: %s", url)
-	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream returned %d for %s", resp.StatusCode, url)
+		httpErr := &httpStatusError{code: resp.StatusCode, url: url}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if secs, parseErr := strconv.Atoi(ra); parseErr == nil && secs > 0 {
+					httpErr.retryAfter = time.Duration(secs) * time.Second
+				}
+			}
+		}
+		return nil, httpErr
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading upstream body: %w", err)
 	}
-
 	return data, nil
 }
 
