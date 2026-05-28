@@ -46,6 +46,12 @@ type Metrics struct {
 	// token. Near-zero when the limiter is disabled or burst is available; higher values
 	// indicate upstream back-pressure. Labels: ecosystem
 	RateLimitWaitDuration *prometheus.HistogramVec
+
+	// UpstreamRetriesTotal counts retry attempts triggered by transient upstream
+	// failures (network errors, 5xx, 429). Only incremented when a retry actually
+	// fires — the initial attempt is not counted. Alert on sustained non-zero rates.
+	// Labels: ecosystem
+	UpstreamRetriesTotal *prometheus.CounterVec
 }
 
 // proxyDurationBuckets covers the expected range for a caching proxy:
@@ -117,6 +123,11 @@ func New(reg prometheus.Registerer, ecosystems []string) *Metrics {
 			Help:    "Time spent waiting for a rate-limit token before an upstream fetch, per ecosystem.",
 			Buckets: rateLimitWaitBuckets,
 		}, []string{"ecosystem"}),
+
+		UpstreamRetriesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "cacheproxyfy_upstream_retries_total",
+			Help: "Total retry attempts against upstream registries due to transient errors, per ecosystem.",
+		}, []string{"ecosystem"}),
 	}
 
 	reg.MustRegister(
@@ -129,6 +140,7 @@ func New(reg prometheus.Registerer, ecosystems []string) *Metrics {
 		m.CVEScansTotal,
 		m.InflightRequests,
 		m.RateLimitWaitDuration,
+		m.UpstreamRetriesTotal,
 	)
 
 	for _, eco := range ecosystems {
@@ -148,6 +160,7 @@ func New(reg prometheus.Registerer, ecosystems []string) *Metrics {
 			m.CVEScansTotal.With(prometheus.Labels{"ecosystem": eco, "outcome": outcome})
 		}
 		m.RateLimitWaitDuration.With(prometheus.Labels{"ecosystem": eco})
+		m.UpstreamRetriesTotal.With(prometheus.Labels{"ecosystem": eco})
 	}
 
 	return m
