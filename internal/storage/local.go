@@ -17,6 +17,13 @@ func NewLocal(baseDir string) (*Local, error) {
 		return nil, fmt.Errorf("creating local storage dir %q: %w", baseDir, err)
 	}
 
+	// Verify the directory is writable before serving traffic.
+	probe := filepath.Join(baseDir, ".write-probe")
+	if err := os.WriteFile(probe, []byte{}, 0600); err != nil {
+		return nil, fmt.Errorf("local storage dir %q is not writable: %w", baseDir, err)
+	}
+	os.Remove(probe)
+
 	return &Local{BaseDir: baseDir}, nil
 }
 
@@ -31,7 +38,7 @@ func (l *Local) Get(_ context.Context, checksum string) (io.ReadCloser, error) {
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("Opening artifact %s: %w", checksum[:8], err)
+		return nil, fmt.Errorf("Opening artifact %s: %w", shortID(checksum), err)
 	}
 
 	return f, nil
@@ -80,7 +87,7 @@ func (l *Local) Exists(_ context.Context, checksum string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("checking artifact %s: %w", checksum[:8], err)
+		return false, fmt.Errorf("checking artifact %s: %w", shortID(checksum), err)
 	}
 	return true, nil
 }
@@ -92,6 +99,15 @@ func (l *Local) Delete(_ context.Context, checksum string) error {
 	}
 
 	return err
+}
+
+// shortID returns the first 8 characters of a checksum for use in error messages,
+// or the full string if it is shorter than 8 characters.
+func shortID(checksum string) string {
+	if len(checksum) <= 8 {
+		return checksum
+	}
+	return checksum[:8]
 }
 
 func (l *Local) path(checksum string) string {
