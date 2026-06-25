@@ -60,14 +60,24 @@ func NewS3(ctx context.Context, cfg S3Config) (*S3, error) {
 		})
 	}
 
+	client := s3.NewFromConfig(awsCfg, s3Opts...)
+
+	// Validate that the bucket is accessible before serving traffic.
+	if _, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(cfg.Bucket)}); err != nil {
+		return nil, fmt.Errorf("S3 bucket %q is not accessible (check bucket name, region, and credentials): %w", cfg.Bucket, err)
+	}
+
 	return &S3{
-		client:    s3.NewFromConfig(awsCfg, s3Opts...),
+		client:    client,
 		bucket:    cfg.Bucket,
 		keyPrefix: cfg.KeyPrefix,
 	}, nil
 }
 
 func (s *S3) Name() string { return "s3" }
+
+// Client exposes the underlying S3 client for use in tests (e.g. creating buckets).
+func (s *S3) Client() *s3.Client { return s.client }
 
 func (s *S3) Get(ctx context.Context, checksum string) (io.ReadCloser, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
@@ -78,7 +88,7 @@ func (s *S3) Get(ctx context.Context, checksum string) (io.ReadCloser, error) {
 		if isNotFound(err) {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("S3 GetObject %s: %w", checksum[:8], err)
+		return nil, fmt.Errorf("S3 GetObject %s: %w", shortID(checksum), err)
 	}
 	return out.Body, nil
 }
@@ -102,7 +112,7 @@ func (s *S3) Put(ctx context.Context, checksum string, r io.Reader, size int64) 
 	}
 
 	if _, err := s.client.PutObject(ctx, input); err != nil {
-		return fmt.Errorf("S3 PutObject %s: %w", checksum[:8], err)
+		return fmt.Errorf("S3 PutObject %s: %w", shortID(checksum), err)
 	}
 	return nil
 }
@@ -116,7 +126,7 @@ func (s *S3) Exists(ctx context.Context, checksum string) (bool, error) {
 		if isNotFound(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("S3 HeadObject %s: %w", checksum[:8], err)
+		return false, fmt.Errorf("S3 HeadObject %s: %w", shortID(checksum), err)
 	}
 	return true, nil
 }
@@ -127,7 +137,7 @@ func (s *S3) Delete(ctx context.Context, checksum string) error {
 		Key:    aws.String(s.key(checksum)),
 	})
 	if err != nil && !isNotFound(err) {
-		return fmt.Errorf("S3 DeleteObject %s: %w", checksum[:8], err)
+		return fmt.Errorf("S3 DeleteObject %s: %w", shortID(checksum), err)
 	}
 	return nil
 }
