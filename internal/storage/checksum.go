@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-func CheckSum(r io.Reader) (string, error) {
+func Checksum(r io.Reader) (string, error) {
 	h := sha256.New()
 	if _, err := io.Copy(h, r); err != nil {
 		return "", fmt.Errorf("Computing Checksum %w", err)
