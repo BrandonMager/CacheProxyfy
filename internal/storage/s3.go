@@ -76,9 +76,6 @@ func NewS3(ctx context.Context, cfg S3Config) (*S3, error) {
 
 func (s *S3) Name() string { return "s3" }
 
-// Client exposes the underlying S3 client for use in tests (e.g. creating buckets).
-func (s *S3) Client() *s3.Client { return s.client }
-
 func (s *S3) Get(ctx context.Context, checksum string) (io.ReadCloser, error) {
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
