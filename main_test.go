@@ -9,6 +9,8 @@ import (
 	"github.com/BrandonMager/CacheProxyfy/internal/config"
 	"github.com/BrandonMager/CacheProxyfy/internal/storage"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	awscredentials "github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/localstack"
@@ -62,18 +64,20 @@ func TestBuildStorage_S3_returnsS3Backend(t *testing.T) {
 
 	const bucket = "test-bucket"
 
-	// Pre-create the bucket so buildStorage can validate it.
-	store, err := storage.NewS3(ctx, storage.S3Config{
-		Bucket:          bucket,
-		Region:          "us-east-1",
-		Endpoint:        endpoint,
-		AccessKeyID:     "test",
-		SecretAccessKey: "test",
-	})
+	// Pre-create the bucket using a raw client before calling buildStorage,
+	// since NewS3 now validates bucket accessibility on construction.
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(awscredentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
 	if err != nil {
-		t.Fatalf("pre-create S3 backend: %v", err)
+		t.Fatalf("load AWS config: %v", err)
 	}
-	if _, err := store.Client().CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+	rawClient := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = true
+	})
+	if _, err := rawClient.CreateBucket(ctx, &awss3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
 

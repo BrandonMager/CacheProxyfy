@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/testcontainers/testcontainers-go"
@@ -84,6 +86,15 @@ func TestS3Integration_CRUD(t *testing.T) {
 
 	const bucket = "test-bucket"
 
+	// Pre-create the bucket using a raw client before calling NewS3,
+	// since NewS3 now validates bucket accessibility on construction.
+	rawClient := newRawS3Client(t, ctx, endpoint)
+	if _, err := rawClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
 	store, err := NewS3(ctx, S3Config{
 		Bucket:          bucket,
 		Region:          "us-east-1",
@@ -93,14 +104,6 @@ func TestS3Integration_CRUD(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("NewS3: %v", err)
-	}
-
-	// Create the bucket via the underlying client (bucket provisioning is outside
-	// the scope of StorageBackend).
-	if _, err := store.client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	}); err != nil {
-		t.Fatalf("CreateBucket: %v", err)
 	}
 
 	const checksum = "abcdef1234567890abcdef1234567890"
@@ -238,4 +241,22 @@ func TestS3_key(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newRawS3Client builds a plain *s3.Client pointed at a LocalStack endpoint.
+// Used in tests to provision buckets before calling NewS3 (which validates
+// bucket accessibility on construction).
+func newRawS3Client(t *testing.T, ctx context.Context, endpoint string) *s3.Client {
+	t.Helper()
+	awsCfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion("us-east-1"),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load AWS config: %v", err)
+	}
+	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = true
+	})
 }
