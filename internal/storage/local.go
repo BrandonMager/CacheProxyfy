@@ -48,17 +48,12 @@ func (l *Local) Put(_ context.Context, checksum string, r io.Reader, _ int64) er
 		return fmt.Errorf("creating artifact dir: %w", err)
 	}
 
-	
-
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
-
-	// Good practice to use .tmp showing artifact currently being created/modified
-	// io.Copy(dst, src) notes
 
 	if _, err := io.Copy(f, r); err != nil {
 		f.Close()
