@@ -1,4 +1,6 @@
-import type { CVEAlert, ConfigResponse, Package, PackageSummary, PaginatedResponse, Stats } from "@/types/api";
+import type { CVEAlert, ConfigResponse, OSVVulnDetail, Package, PackageSummary, PaginatedResponse, Stats } from "@/types/api";
+
+const OSV_API_BASE = "https://api.osv.dev/v1";
 
 // API_URL is a server-only runtime env var (set via ConfigMap in k8s or .env.local locally).
 // Falls back to NEXT_PUBLIC_API_URL for backward compatibility, then localhost for local dev.
@@ -86,6 +88,20 @@ export function listPackageCVEAlerts(
 // GET /api/config
 export function getConfig(): Promise<ConfigResponse> {
   return apiFetch<ConfigResponse>("/api/config");
+}
+
+// GET https://api.osv.dev/v1/vulns/{id}
+// Fetches the full vulnerability record directly from OSV — our own DB only
+// persists id/severity/outcome, so the description and stats shown on the
+// CVE detail page come straight from the upstream OSV API.
+export async function getOSVVulnDetail(id: string): Promise<OSVVulnDetail> {
+  const res = await fetch(`${OSV_API_BASE}/vulns/${encodeURIComponent(id)}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`OSV error ${res.status}: ${id}`);
+  }
+  return res.json() as Promise<OSVVulnDetail>;
 }
 
 // GET /api/cve-alerts?since=<duration>[&ecosystem=<eco>]

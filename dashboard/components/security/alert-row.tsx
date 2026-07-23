@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { EcosystemBadge } from "@/components/ui/ecosystem-badge";
 import { SeverityBadge } from "@/components/ui/severity-badge";
 import { OutcomeBadge } from "./outcome-badge";
@@ -11,7 +12,10 @@ const formatDate = (iso: string) =>
   });
 
 export const AlertRow = ({ alert }: { alert: CVEAlert }) => (
-  <div className="grid grid-cols-[90px_160px_1fr_100px_130px_90px_120px] items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+  <Link
+    href={`/security/${encodeURIComponent(alert.cve_id)}`}
+    className="grid grid-cols-[90px_160px_1fr_100px_130px_90px_120px] items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+  >
     <div className="flex items-center">
       <SeverityBadge severity={alert.severity} />
     </div>
@@ -33,5 +37,5 @@ export const AlertRow = ({ alert }: { alert: CVEAlert }) => (
     <span className="text-sm text-gray-500 dark:text-gray-400">
       {formatDate(alert.recorded_at)}
     </span>
-  </div>
+  </Link>
 );
