@@ -21,6 +21,25 @@ export interface CVEAlert {
   recorded_at: string;
 }
 
+// OSVVulnDetail mirrors the subset of fields returned by OSV's
+// GET https://api.osv.dev/v1/vulns/{id} endpoint that the CVE detail
+// page renders. Our own DB only stores id/severity/outcome, so the
+// description and stats shown here come straight from OSV.
+export interface OSVVulnDetail {
+  id: string;
+  summary?: string;
+  details?: string;
+  published?: string;
+  modified?: string;
+  aliases?: string[];
+  references?: { type: string; url: string }[];
+  severity?: { type: string; score: string }[];
+  affected?: {
+    package?: { name: string; ecosystem: string };
+    ranges?: { type: string; events: { introduced?: string; fixed?: string }[] }[];
+  }[];
+}
+
 export interface PackageSummary {
   ecosystem: string;
   name: string;
